@@ -24,12 +24,17 @@ template <typename T, typename D>
 concept DereferencesTo = requires(const T &t) {
     { *t } -> std::convertible_to<D>;
 };
+template <std::output_iterator<std::byte> O, DereferencesTo<const Value &> I>
+void encode(O &output, const I &value);
 
 /** Simple Lua value.
  * Needs a wrapping struct so it can self-reference.
  */
 class Value {
   public:
+    template <std::output_iterator<std::byte> O>
+    friend void encode(O &, const Value &);
+
     using Type = std::variant<
       // Out of order so that default-constructed Value is Undefined.
       Undefined,
@@ -77,19 +82,28 @@ class Value {
         return output;
     }
 
-    /*template <std::input_iterator I, std::sentinel_for<I> S>
+    template <std::input_iterator I, std::sentinel_for<I> S>
         requires std::same_as<std::iter_value_t<I>, std::byte>
-    void decode(I input, S last) const {
-        std::visit(
-          [output](auto &&arg) {
-              using T = std::decay_t<decltype(arg)>;
-              if constexpr (std::is_same_v<T, std::int64_t>) {
-                  ::conbor::encode(output, arg);
-              } else {
-                  std::terminate();
-              }
-          },
-          value);
+    void decode(I input, S last) {
+        conbor::Type type{};
+        std::uint64_t count;
+        std::tie(type, count) = read_header(input, last);
+
+        using enum conbor::Type;
+        switch (type) {
+            case conbor::Type::PositiveInteger: {
+                value = static_cast<std::int64_t>(count);
+                break;
+            }
+
+            case conbor::Type::NegativeInteger: {
+                value = -static_cast<std::int64_t>(count) - 1;
+                break;
+            }
+            default:
+                // Not implemented yet
+                std::terminate();
+        }
     }
 
     template <std::input_iterator I, std::sentinel_for<I> S>
@@ -106,7 +120,7 @@ class Value {
         Value output;
         output.decode(input.begin(), input.end());
         return output;
-    }*/
+    }
 
     constexpr auto operator<=>(const Value &other) const noexcept = default;
 };

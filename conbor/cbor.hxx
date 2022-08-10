@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -20,7 +21,6 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <memory>
 
 namespace conbor {
 class Error : public std::runtime_error {
@@ -102,6 +102,41 @@ enum class Type {
     SemanticTag = 6,
     SpecialFloat = 7
 };
+
+    template <std::input_iterator I, std::sentinel_for<I> S>
+        requires std::same_as<std::iter_value_t<I>, std::byte>
+std::tuple<Type, std::uint64_t> read_header(I &input, S last) {
+    const auto first_byte = read(input, last);
+    const auto type = static_cast<Type>(first_byte >> 5);
+    auto count = static_cast<std::uint64_t>(first_byte & std::byte(0b00011111));
+    if (count == 24) {
+        // 8-bit count
+        count = static_cast<std::uint64_t>(read(input, last));
+    } else if (count == 25) {
+        // 16-bit count
+        count = (static_cast<std::uint64_t>(read(input, last)) << 8)
+         | static_cast<std::uint64_t>(read(input, last));
+    } else if (count == 26) {
+        // 32-bit count
+        count = (static_cast<std::uint64_t>(read(input, last)) << 24)
+            | (static_cast<std::uint64_t>(read(input, last)) << 16)
+            | (static_cast<std::uint64_t>(read(input, last)) << 8)
+            | static_cast<std::uint64_t>(read(input, last));
+    } else if (count == 27) {
+        // 64-bit count
+        count =
+            (static_cast<std::uint64_t>(read(input, last)) << 56)
+            | (static_cast<std::uint64_t>(read(input, last)) << 48)
+            | (static_cast<std::uint64_t>(read(input, last)) << 40)
+            | (static_cast<std::uint64_t>(read(input, last)) << 32)
+            | (static_cast<std::uint64_t>(read(input, last)) << 24)
+            | (static_cast<std::uint64_t>(read(input, last)) << 16)
+            | (static_cast<std::uint64_t>(read(input, last)) << 8)
+            | static_cast<std::uint64_t>(read(input, last));
+    }
+
+    return {type, count};
+}
 
 /** Encode the value into output.
  *

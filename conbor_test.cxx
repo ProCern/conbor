@@ -118,12 +118,83 @@ TEST(Encoding, NegativeInteger) {
       << "8 byte negative int";
 }
 
-/*TEST(Encoding, ByteString) {
+TEST(Encoding, ByteString) {
     EXPECT_EQ(
-         (conbor::Value(std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)}).encoded()),
-}*/
+      (conbor::Value(std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)})
+         .encoded()),
+      (std::vector<std::byte>{
+        std::byte(2 << 5) | std::byte(4),
+        std::byte(1),
+        std::byte(3),
+        std::byte(3),
+        std::byte(7)}));
+}
 
-/*TEST(Decoding, PositiveInteger) {
+TEST(Encoding, String) {
+    EXPECT_EQ(
+      (conbor::Value(std::u8string_view(u8"1337")).encoded()),
+      (std::vector<std::byte>{
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7')}));
+}
+
+TEST(Encoding, Array) {
+    std::vector<std::unique_ptr<conbor::Value>> array;
+    array.push_back(std::make_unique<conbor::Value>(
+      std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)}));
+    array.push_back(std::make_unique<conbor::Value>(std::u8string_view(u8"1337")));
+    EXPECT_EQ(
+      conbor::Value(std::move(array)).encoded(),
+
+      (std::vector<std::byte>{
+        // Header
+        std::byte(4 << 5) | std::byte(2),
+        // Bytestring
+        std::byte(2 << 5) | std::byte(4),
+        std::byte(1),
+        std::byte(3),
+        std::byte(3),
+        std::byte(7),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+      }));
+}
+
+TEST(Encoding, Map) {
+    std::map<std::unique_ptr<conbor::Value>, std::unique_ptr<conbor::Value>> map;
+    map.insert(std::make_pair(
+      std::make_unique<conbor::Value>(
+        std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)}),
+      std::make_unique<conbor::Value>(std::u8string_view(u8"1337"))));
+    EXPECT_EQ(
+      conbor::Value(std::move(map)).encoded(),
+
+      (std::vector<std::byte>{
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // Bytestring
+        std::byte(2 << 5) | std::byte(4),
+        std::byte(1),
+        std::byte(3),
+        std::byte(3),
+        std::byte(7),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+      }));
+}
+
+TEST(Decoding, PositiveInteger) {
     EXPECT_EQ(conbor::Value(5), conbor::Value::decoded(std::vector<std::byte>{std::byte(5)}))
       << "tiny positive int";
     EXPECT_EQ(conbor::Value(24), (conbor::Value::decoded(std::vector<std::byte>{std::byte(24),
@@ -151,42 +222,4 @@ std::byte(24)})))
         std::byte(0),
         std::byte(0)})))
       << "8 byte positive int";
-}*/
-
-/*TEST(Decoding, NegativeInteger) {
-    EXPECT_EQ(conbor::Value(-6), conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) |
-std::byte(5)}))
-      << "tiny negative int";
-    EXPECT_EQ(
-      conbor::Value(-25),
-      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(24),
-std::byte(24)})))
-      << "1 byte negative int";
-    EXPECT_EQ(
-      conbor::Value(-257),
-      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(25),
-std::byte(1), std::byte(0)})))
-      << "2 byte negative int";
-    EXPECT_EQ(
-      conbor::Value(-65537),
-      (conbor::Value::decoded(std::vector<std::byte>{
-        std::byte(1 << 5) | std::byte(26),
-        std::byte(0),
-        std::byte(1),
-        std::byte(0),
-        std::byte(0)})))
-      << "4 byte negative int";
-    EXPECT_EQ(
-      conbor::Value(-4294967297),
-      (conbor::Value::decoded(std::vector<std::byte>{
-        std::byte(1 << 5) | std::byte(27),
-        std::byte(0),
-        std::byte(0),
-        std::byte(0),
-        std::byte(1),
-        std::byte(0),
-        std::byte(0),
-        std::byte(0),
-        std::byte(0)})))
-      << "8 byte negative int";
-}*/
+}
