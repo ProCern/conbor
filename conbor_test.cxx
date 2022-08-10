@@ -10,19 +10,48 @@ TEST(BuildValue, Equality) {
     EXPECT_EQ(
       conbor::Value(std::u8string_view(u8"Hello")),
       conbor::Value(std::u8string_view(u8"Hello")));
+    EXPECT_EQ(conbor::Value(), conbor::Value(conbor::Undefined{}))
+      << "Default constructed should be Undefined";
+}
+
+TEST(Encoding, Tagged) {
     EXPECT_EQ(
-      conbor::Value(),
-      conbor::Value(conbor::Undefined{})) << "Default constructed should be Undefined";
+      conbor::Value(conbor::Tagged(55799, std::make_unique<conbor::Value>(true))).encoded(),
+      (std::vector<std::byte>{
+        std::byte(0xd9),
+        std::byte(0xd9),
+        std::byte(0xf7),
+        std::byte(7 << 5) | std::byte(21)}))
+      << "conbor tagged true";
 }
 
 TEST(Encoding, Specials) {
-    EXPECT_EQ(conbor::Value(false).encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(20)}) << "boolean false";
-    EXPECT_EQ(conbor::Value(true).encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(21)}) << "boolean true";
-    EXPECT_EQ(conbor::Value(conbor::Null{}).encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}) << "null";
-    EXPECT_EQ(conbor::Value(nullptr).encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}) << "nullptr null";
-    EXPECT_EQ(conbor::Value(conbor::Undefined{}).encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(23)}) << "undefined";
-    EXPECT_EQ(conbor::Value().encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(23)}) << "default undefined";
-    EXPECT_EQ(conbor::Value(conbor::Break{}).encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(31)}) << "break";
+    EXPECT_EQ(
+      conbor::Value(false).encoded(),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(20)})
+      << "boolean false";
+    EXPECT_EQ(
+      conbor::Value(true).encoded(),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(21)})
+      << "boolean true";
+    EXPECT_EQ(
+      conbor::Value(conbor::Null{}).encoded(),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)})
+      << "null";
+    EXPECT_EQ(
+      conbor::Value(nullptr).encoded(),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)})
+      << "nullptr null";
+    EXPECT_EQ(
+      conbor::Value(conbor::Undefined{}).encoded(),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(23)})
+      << "undefined";
+    EXPECT_EQ(conbor::Value().encoded(), std::vector<std::byte>{std::byte(7 << 5) | std::byte(23)})
+      << "default undefined";
+    EXPECT_EQ(
+      conbor::Value(conbor::Break{}).encoded(),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(31)})
+      << "break";
 }
 
 TEST(Encoding, PositiveInteger) {
@@ -89,10 +118,16 @@ TEST(Encoding, NegativeInteger) {
       << "8 byte negative int";
 }
 
+/*TEST(Encoding, ByteString) {
+    EXPECT_EQ(
+         (conbor::Value(std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)}).encoded()),
+}*/
+
 /*TEST(Decoding, PositiveInteger) {
     EXPECT_EQ(conbor::Value(5), conbor::Value::decoded(std::vector<std::byte>{std::byte(5)}))
       << "tiny positive int";
-    EXPECT_EQ(conbor::Value(24), (conbor::Value::decoded(std::vector<std::byte>{std::byte(24), std::byte(24)})))
+    EXPECT_EQ(conbor::Value(24), (conbor::Value::decoded(std::vector<std::byte>{std::byte(24),
+std::byte(24)})))
       << "1 byte positive int";
     EXPECT_EQ(
       conbor::Value(256),
@@ -119,15 +154,18 @@ TEST(Encoding, NegativeInteger) {
 }*/
 
 /*TEST(Decoding, NegativeInteger) {
-    EXPECT_EQ(conbor::Value(-6), conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(5)}))
+    EXPECT_EQ(conbor::Value(-6), conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) |
+std::byte(5)}))
       << "tiny negative int";
     EXPECT_EQ(
       conbor::Value(-25),
-      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(24), std::byte(24)})))
+      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(24),
+std::byte(24)})))
       << "1 byte negative int";
     EXPECT_EQ(
       conbor::Value(-257),
-      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(25), std::byte(1), std::byte(0)})))
+      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(25),
+std::byte(1), std::byte(0)})))
       << "2 byte negative int";
     EXPECT_EQ(
       conbor::Value(-65537),

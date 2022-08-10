@@ -4,7 +4,6 @@
 #pragma once
 
 #include <algorithm>
-#include <type_traits>
 #include <array>
 #include <bit>
 #include <bitset>
@@ -15,85 +14,94 @@
 #include <iterator>
 #include <limits>
 #include <ranges>
-#include <tuple>
 #include <span>
+#include <stdexcept>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
-#include <stdexcept>
+#include <memory>
 
 namespace conbor {
-    class Error : public std::runtime_error {
-        public:
+class Error : public std::runtime_error {
+  public:
     template <class... Args>
     requires std::constructible_from<std::runtime_error, Args...> Error(Args &&...t) :
         runtime_error(std::forward<Args>(t)...) {
-        }
-    };
+    }
+};
 
-    class Value;
+class Value;
 
-    struct BorrowedByteString {
-        std::span<const std::byte> value;
+struct BorrowedByteString {
+    std::span<const std::byte> value;
 
-        // Why isn't std::span ordered already?  std::vector is.  Weird.
-        constexpr std::strong_ordering operator<=>(const BorrowedByteString &other) const noexcept {
-            return std::basic_string_view<std::byte>(value.data(), value.size()) <=>
-              std::basic_string_view<std::byte>(other.value.data(), other.value.size());
-        }
-
-        template <class... Args>
-        requires std::constructible_from<std::span<const std::byte>, Args...>
-        constexpr BorrowedByteString(Args &&...args) : value(std::forward<Args>(args)...) {
-        }
-
-        constexpr bool operator==(const BorrowedByteString &other) const noexcept {
-            return std::basic_string_view<std::byte>(value.data(), value.size()) ==
-              std::basic_string_view<std::byte>(other.value.data(), other.value.size());
-        }
-    };
-
-    struct Tagged {
-        std::uint64_t tag{};
-        std::unique_ptr<Value> item;
-
-        auto operator<=>(const Tagged &other) const noexcept = default;
-    };
-
-    struct Undefined {
-        auto operator<=>(const Undefined &other) const noexcept = default;
-    };
-
-    struct Null {
-        auto operator<=>(const Null &other) const noexcept = default;
-    };
-
-    struct Break {
-        auto operator<=>(const Break &other) const noexcept = default;
-    };
-
-    /** Read a single byte, throwing an error if input == last
-     */
-    template <std::input_iterator I, std::sentinel_for<I> S>
-        requires std::same_as<std::iter_value_t<I>, std::byte>
-    inline std::byte read(I &input, S last) {
-        if (input == last) {
-            throw Error("Reached end of input early");
-        }
-        const std::byte output = *input;
-        ++input;
-        return output;
+    // Why isn't std::span ordered already?  std::vector is.  Weird.
+    constexpr std::strong_ordering operator<=>(const BorrowedByteString &other) const noexcept {
+        return std::basic_string_view<std::byte>(value.data(), value.size()) <=>
+          std::basic_string_view<std::byte>(other.value.data(), other.value.size());
     }
 
-    enum class Type {
-        PositiveInteger = 0,
-        NegativeInteger = 1,
-        ByteString = 2,
-        Utf8String = 3,
-        Array = 4,
-        Map = 5,
-        SemanticTag = 6,
-        SpecialFloat = 7
-    };
+    template <class... Args>
+    requires std::constructible_from<std::span<const std::byte>, Args...>
+    constexpr BorrowedByteString(Args &&...args) : value(std::forward<Args>(args)...) {
+    }
+
+    constexpr bool operator==(const BorrowedByteString &other) const noexcept {
+        return std::basic_string_view<std::byte>(value.data(), value.size()) ==
+          std::basic_string_view<std::byte>(other.value.data(), other.value.size());
+    }
+};
+
+struct Tagged {
+    std::uint64_t tag{};
+    std::unique_ptr<Value> item;
+
+    constexpr Tagged() noexcept = default;
+
+    inline Tagged(const std::uint64_t tag, std::unique_ptr<Value> item) :
+        tag(tag),
+        item(std::move(item)) {
+    }
+
+    auto operator<=>(const Tagged &other) const noexcept = default;
+};
+
+struct Undefined {
+    auto operator<=>(const Undefined &other) const noexcept = default;
+};
+
+struct Null {
+    auto operator<=>(const Null &other) const noexcept = default;
+};
+
+struct Break {
+    auto operator<=>(const Break &other) const noexcept = default;
+};
+
+/** Read a single byte, throwing an error if input == last
+ */
+template <std::input_iterator I, std::sentinel_for<I> S>
+requires std::same_as<std::iter_value_t<I>, std::byte>
+inline std::byte read(I &input, S last) {
+    if (input == last) {
+        throw Error("Reached end of input early");
+    }
+    const std::byte output = *input;
+    ++input;
+    return output;
+}
+
+enum class Type {
+    PositiveInteger = 0,
+    NegativeInteger = 1,
+    ByteString = 2,
+    Utf8String = 3,
+    Array = 4,
+    Map = 5,
+    SemanticTag = 6,
+    SpecialFloat = 7
+};
 
 /** Encode the value into output.
  *
@@ -162,6 +170,27 @@ void encode(O &output, const R &value) {
     std::ranges::copy(value, output);
 }
 
+/** Encode the borrowed byte string.
+ */
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const BorrowedByteString &value) {
+    encode(output, value.value);
+}
+
+/** Encode the utf8 string.
+ */
+template <std::output_iterator<std::byte> O, std::ranges::input_range R>
+requires std::ranges::sized_range<R> && std::same_as < std::ranges::range_value_t<R>,
+char8_t > void encode(O &output, const R &value) {
+    encode(output, Type::Utf8String, static_cast<uint64_t>(value.size()));
+
+    std::ranges::copy(
+      value | std::views::transform([](const char8_t c) {
+          return std::byte(c);
+      }),
+      output);
+}
+
 /** Pair concept.
  */
 template <typename T>
@@ -170,24 +199,26 @@ concept Pair = std::tuple_size<T>::value == 2;
 /** References an array range
  */
 template <typename T>
-concept EncodeableRange = requires(const T &t) {
-    encode(std::vector<std::byte>{}.begin(), *t.begin());
+concept EncodeableRange = requires(const T &t, std::byte *o) {
+    requires std::ranges::input_range<T>;
+    encode(o, *std::ranges::begin(t));
 };
 
 /** References a mapping range.
  */
 template <typename T>
-concept EncodeablePairRange = requires(const T &t) {
+concept EncodeablePairRange = requires(const T &t, std::byte *o) {
+    requires std::ranges::input_range<T>;
     requires Pair<std::iter_value_t<std::ranges::iterator_t<T>>>;
 
-    encode(std::vector<std::byte>{}.begin(), std::get<0>(*t.begin()));
-    encode(std::vector<std::byte>{}.begin(), std::get<1>(*t.begin()));
+    encode(o, std::get<0>(*std::ranges::begin(t)));
+    encode(o, std::get<1>(*std::ranges::begin(t)));
 };
 
 /** Encode a sized array.
  */
 template <std::output_iterator<std::byte> O, EncodeableRange R>
-requires std::ranges::sized_range<R> && std::ranges::input_range<R>
+requires std::ranges::sized_range<R>
 void encode(O &output, const R &value) {
     encode(output, Type::Array, static_cast<uint64_t>(value.size()));
     for (const auto &item : value) {
@@ -198,7 +229,7 @@ void encode(O &output, const R &value) {
 /** Encode a sized map.
  */
 template <std::output_iterator<std::byte> O, EncodeablePairRange R>
-requires std::ranges::sized_range<R> && std::ranges::input_range<R>
+requires std::ranges::sized_range<R>
 void encode(O &output, const R &value) {
     encode(output, Type::Map, static_cast<uint64_t>(value.size()));
     for (const auto &[k, v] : value) {
@@ -208,8 +239,9 @@ void encode(O &output, const R &value) {
 }
 
 template <std::output_iterator<std::byte> O, std::signed_integral I>
-requires (!std::same_as<I, bool>)
-void encode(O &output, const I value) {
+requires(!std::same_as<I, bool>) &&
+  (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, signed char>)&&(
+    !std::same_as<I, unsigned char>)void encode(O &output, const I value) {
     if (value < 0) {
         encode(output, Type::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
     } else {
@@ -218,8 +250,9 @@ void encode(O &output, const I value) {
 }
 
 template <std::output_iterator<std::byte> O, std::unsigned_integral I>
-requires (!std::same_as<I, bool>)
-void encode(O &output, const I value) {
+requires(!std::same_as<I, bool>) &&
+  (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, signed char>)&&(
+    !std::same_as<I, unsigned char>)void encode(O &output, const I value) {
     encode(output, Type::PositiveInteger, static_cast<std::uint64_t>(value));
 }
 

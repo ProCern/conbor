@@ -3,6 +3,7 @@
  */
 #pragma once
 
+#include "cbor.hxx"
 #include <compare>
 #include <concepts>
 #include <cstddef>
@@ -17,19 +18,17 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
-#include "cbor.hxx"
-
 
 namespace conbor {
-    template <std::output_iterator<std::byte> O>
-        void encode(O &output, const Value &value);
+template <typename T, typename D>
+concept DereferencesTo = requires(const T &t) {
+    { *t } -> std::convertible_to<D>;
+};
 
 /** Simple Lua value.
  * Needs a wrapping struct so it can self-reference.
  */
 class Value {
-template <std::output_iterator<std::byte> O>
-    friend void ::conbor::encode(O &, const Value &);
   public:
     using Type = std::variant<
       // Out of order so that default-constructed Value is Undefined.
@@ -56,10 +55,8 @@ template <std::output_iterator<std::byte> O>
       double,
       Break>;
 
-  private:
     Type value;
 
-  public:
     template <class... Args>
     requires std::constructible_from<Type, Args...> Value(Args &&...t) :
         value(std::forward<Args>(t)...) {
@@ -70,7 +67,7 @@ template <std::output_iterator<std::byte> O>
 
     template <std::output_iterator<std::byte> O>
     void encode(O &&output) const {
-        ::conbor::encode(output, *this);
+        ::conbor::encode(output, this);
     }
 
     // Encode this to cbor.
@@ -114,38 +111,25 @@ template <std::output_iterator<std::byte> O>
     constexpr auto operator<=>(const Value &other) const noexcept = default;
 };
 
-/** Encode the Value.
+/** Encode a pointer to a Value.
+ * Needs to be like this, otherwise the templates will try to build the value
+ * itself.
  */
 template <std::output_iterator<std::byte> O>
 void encode(O &output, const Value &value) {
     std::visit(
-            [&](auto &&arg) {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, std::int64_t>
-                    || std::is_same_v<T, bool>
-                    || std::is_same_v<T, Null>
-                    || std::is_same_v<T, Undefined>
-                    || std::is_same_v<T, Break>
-
-                    ) {
-            ::conbor::encode(output, arg);
-            } else {
-            std::terminate();
-            }
-            },
-        value.value);
+      [&output](const auto &arg) {
+          ::conbor::encode(output, arg);
+      },
+      value.value);
 }
 
-template <typename T, typename D>
-concept DereferencesTo = requires (const T &t) {
-    {*t} -> std::convertible_to<D>;
-};
-
 /** Encode a pointer to a Value.
+ * Needs to be like this, otherwise the templates will try to build the value
+ * itself.
  */
 template <std::output_iterator<std::byte> O, DereferencesTo<const Value &> I>
 void encode(O &output, const I &value) {
-    const Value & dereferenced = *value;
-    encode(output, dereferenced);
+    encode(output, *value);
 }
 } // namespace conbor
