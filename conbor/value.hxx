@@ -4,58 +4,44 @@
 #pragma once
 
 #include <compare>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <span>
 #include <string>
 #include <tuple>
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include "cbor.hxx"
+
 
 namespace conbor {
-// Why isn't std::span ordered already?  std::vector is.  Weird.
-constexpr std::strong_ordering operator<=>(
-  const std::span<const std::byte> &a,
-  const std::span<const std::byte> &b) {
-    return std::basic_string_view<std::byte>(a.data(), a.size()) <=>
-      std::basic_string_view<std::byte>(b.data(), b.size());
-}
+    template <std::output_iterator<std::byte> O>
+        void encode(O &output, const Value &value);
 
 /** Simple Lua value.
  * Needs a wrapping struct so it can self-reference.
  */
 class Value {
+template <std::output_iterator<std::byte> O>
+    friend void ::conbor::encode(O &, const Value &);
   public:
-    struct Tagged {
-        std::uint64_t tag{};
-        std::unique_ptr<Value> item;
-
-        auto operator<=>(const Tagged &other) const noexcept = default;
-    };
-
-    struct Undefined {
-        auto operator<=>(const Undefined &other) const noexcept = default;
-    };
-
-    struct Null {
-        auto operator<=>(const Null &other) const noexcept = default;
-    };
-
-    struct Break {
-        auto operator<=>(const Break &other) const noexcept = default;
-    };
-
     using Type = std::variant<
+      // Out of order so that default-constructed Value is Undefined.
+      Undefined,
+
       std::int64_t,
 
       // owned byte string
       std::vector<std::byte>,
 
       // borrowed byte string
-      std::span<const std::byte>,
+      BorrowedByteString,
 
       // owned string
       std::u8string,
@@ -64,10 +50,9 @@ class Value {
       std::u8string_view,
       std::vector<std::unique_ptr<Value>>,
       std::map<std::unique_ptr<Value>, std::unique_ptr<Value>>,
+      Tagged,
       bool,
       Null,
-      Undefined,
-      float,
       double,
       Break>;
 
@@ -75,15 +60,92 @@ class Value {
     Type value;
 
   public:
-    Value() noexcept = default;
-    Value(Type value) noexcept;
+    template <class... Args>
+    requires std::constructible_from<Type, Args...> Value(Args &&...t) :
+        value(std::forward<Args>(t)...) {
+    }
+
+    inline Value(const std::nullptr_t) : Value(Null{}) {
+    }
+
+    template <std::output_iterator<std::byte> O>
+    void encode(O &&output) const {
+        ::conbor::encode(output, *this);
+    }
 
     // Encode this to cbor.
-    std::vector<std::byte> encode_cbor();
+    inline std::vector<std::byte> encoded() const {
+        std::vector<std::byte> output;
+        encode(std::back_inserter(output));
+        return output;
+    }
 
-    // Decode to this from cbor
-    static Value decode_cbor(std::span<const std::byte> data);
+    /*template <std::input_iterator I, std::sentinel_for<I> S>
+        requires std::same_as<std::iter_value_t<I>, std::byte>
+    void decode(I input, S last) const {
+        std::visit(
+          [output](auto &&arg) {
+              using T = std::decay_t<decltype(arg)>;
+              if constexpr (std::is_same_v<T, std::int64_t>) {
+                  ::conbor::encode(output, arg);
+              } else {
+                  std::terminate();
+              }
+          },
+          value);
+    }
+
+    template <std::input_iterator I, std::sentinel_for<I> S>
+        requires std::same_as<std::iter_value_t<I>, std::byte>
+    static inline Value decoded(I input, S last) {
+        Value output;
+        output.decode(input, last);
+        return output;
+    }
+
+    template <std::ranges::input_range I>
+        requires std::same_as<std::ranges::range_value_t<I>, std::byte>
+    static inline Value decoded(I &&input) {
+        Value output;
+        output.decode(input.begin(), input.end());
+        return output;
+    }*/
 
     constexpr auto operator<=>(const Value &other) const noexcept = default;
 };
+
+/** Encode the Value.
+ */
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Value &value) {
+    std::visit(
+            [&](auto &&arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, std::int64_t>
+                    || std::is_same_v<T, bool>
+                    || std::is_same_v<T, Null>
+                    || std::is_same_v<T, Undefined>
+                    || std::is_same_v<T, Break>
+
+                    ) {
+            ::conbor::encode(output, arg);
+            } else {
+            std::terminate();
+            }
+            },
+        value.value);
+}
+
+template <typename T, typename D>
+concept DereferencesTo = requires (const T &t) {
+    {*t} -> std::convertible_to<D>;
+};
+
+/** Encode a pointer to a Value.
+ */
+template <std::output_iterator<std::byte> O, DereferencesTo<const Value &> I>
+void encode(O &output, const I &value) {
+    const Value & dereferenced = *value;
+    encode(output, dereferenced);
+}
 } // namespace conbor

@@ -5,7 +5,4 @@
 
 #include <stdexcept>
 
-namespace conbor {
-Value::Value(Type value) noexcept : value(std::move(value)) {
-}
-} // namespace conbor
+namespace conbor {} // namespace conbor

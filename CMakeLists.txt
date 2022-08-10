@@ -14,6 +14,16 @@ add_library(
     conbor/value.cxx
     )
 
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG release-1.12.1
+)
+# For Windows: Prevent overriding the parent project's compiler/linker settings
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
 set_property(TARGET conbor PROPERTY POSITION_INDEPENDENT_CODE TRUE)
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
@@ -29,6 +39,7 @@ target_link_libraries(conbor PUBLIC SQLite::SQLite3 Threads::Threads)
 
 install(FILES
     conbor/value.hxx
+    conbor/cbor.hxx
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/conbor"
     )
 
@@ -58,3 +69,17 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/conborConfig.cmake
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/conbor"
         )
 
+enable_testing()
+
+add_executable(
+  conbor_test
+  conbor_test.cxx
+)
+target_link_libraries(
+  conbor_test
+  GTest::gtest_main
+  conbor
+)
+
+include(GoogleTest)
+gtest_discover_tests(conbor_test)

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <type_traits>
 #include <array>
 #include <bit>
 #include <bitset>
@@ -15,120 +16,149 @@
 #include <limits>
 #include <ranges>
 #include <tuple>
+#include <span>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
-namespace sard {
-namespace cbor {
+namespace conbor {
+    class Error : public std::runtime_error {
+        public:
+    template <class... Args>
+    requires std::constructible_from<std::runtime_error, Args...> Error(Args &&...t) :
+        runtime_error(std::forward<Args>(t)...) {
+        }
+    };
+
+    class Value;
+
+    struct BorrowedByteString {
+        std::span<const std::byte> value;
+
+        // Why isn't std::span ordered already?  std::vector is.  Weird.
+        constexpr std::strong_ordering operator<=>(const BorrowedByteString &other) const noexcept {
+            return std::basic_string_view<std::byte>(value.data(), value.size()) <=>
+              std::basic_string_view<std::byte>(other.value.data(), other.value.size());
+        }
+
+        template <class... Args>
+        requires std::constructible_from<std::span<const std::byte>, Args...>
+        constexpr BorrowedByteString(Args &&...args) : value(std::forward<Args>(args)...) {
+        }
+
+        constexpr bool operator==(const BorrowedByteString &other) const noexcept {
+            return std::basic_string_view<std::byte>(value.data(), value.size()) ==
+              std::basic_string_view<std::byte>(other.value.data(), other.value.size());
+        }
+    };
+
+    struct Tagged {
+        std::uint64_t tag{};
+        std::unique_ptr<Value> item;
+
+        auto operator<=>(const Tagged &other) const noexcept = default;
+    };
+
+    struct Undefined {
+        auto operator<=>(const Undefined &other) const noexcept = default;
+    };
+
+    struct Null {
+        auto operator<=>(const Null &other) const noexcept = default;
+    };
+
+    struct Break {
+        auto operator<=>(const Break &other) const noexcept = default;
+    };
+
+    /** Read a single byte, throwing an error if input == last
+     */
+    template <std::input_iterator I, std::sentinel_for<I> S>
+        requires std::same_as<std::iter_value_t<I>, std::byte>
+    inline std::byte read(I &input, S last) {
+        if (input == last) {
+            throw Error("Reached end of input early");
+        }
+        const std::byte output = *input;
+        ++input;
+        return output;
+    }
+
+    enum class Type {
+        PositiveInteger = 0,
+        NegativeInteger = 1,
+        ByteString = 2,
+        Utf8String = 3,
+        Array = 4,
+        Map = 5,
+        SemanticTag = 6,
+        SpecialFloat = 7
+    };
+
 /** Encode the value into output.
+ *
+ * Value is expected to already be modified if negative (cbor negative values
+ * are shifted so negative 0 is impossible).
  */
-template <class O>
-requires std::output_iterator<O, std::byte>
-void encode(O output, const std::uint64_t value, const bool negative) {
-    const auto type = std::byte(static_cast<unsigned>(negative) << 5);
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Type type, const std::uint64_t count) {
+    const auto type_byte = std::byte(static_cast<std::uint8_t>(type) << 5);
 
-    if (value < 24) {
-        *output = (type | std::byte(value));
+    if (count < 24 || (type == Type::SpecialFloat && count == 31)) {
+        *output = (type_byte | std::byte(count));
         ++output;
-    } else if (value < 0x100) {
-        *output = (type | std::byte(24));
+    } else if (count < 0x100ull) {
+        *output = (type_byte | std::byte(24));
         ++output;
-        *output = std::byte(value);
+        *output = std::byte(count);
         ++output;
-    } else if (value < 0x10000) {
-        *output = (type | std::byte(25));
+    } else if (count < 0x10000ull) {
+        *output = (type_byte | std::byte(25));
         ++output;
-        *output = std::byte(value >> 8);
+        *output = std::byte(count >> 8);
         ++output;
-        *output = std::byte(value);
+        *output = std::byte(count);
         ++output;
-    } else if (value < 0x1000000) {
-        *output = (type | std::byte(26));
+    } else if (count < 0x1000000ull) {
+        *output = (type_byte | std::byte(26));
         ++output;
-        *output = std::byte(value >> 24);
+        *output = std::byte(count >> 24);
         ++output;
-        *output = std::byte(value >> 16);
+        *output = std::byte(count >> 16);
         ++output;
-        *output = std::byte(value >> 8);
+        *output = std::byte(count >> 8);
         ++output;
-        *output = std::byte(value);
+        *output = std::byte(count);
         ++output;
     } else {
-        *output = (type | std::byte(27));
+        *output = (type_byte | std::byte(27));
         ++output;
-        *output = std::byte(value >> 56);
+        *output = std::byte(count >> 56);
         ++output;
-        *output = std::byte(value >> 48);
+        *output = std::byte(count >> 48);
         ++output;
-        *output = std::byte(value >> 40);
+        *output = std::byte(count >> 40);
         ++output;
-        *output = std::byte(value >> 32);
+        *output = std::byte(count >> 32);
         ++output;
-        *output = std::byte(value >> 24);
+        *output = std::byte(count >> 24);
         ++output;
-        *output = std::byte(value >> 16);
+        *output = std::byte(count >> 16);
         ++output;
-        *output = std::byte(value >> 8);
+        *output = std::byte(count >> 8);
         ++output;
-        *output = std::byte(value);
+        *output = std::byte(count);
         ++output;
     }
 }
 
 /** Encode the byte string.
  */
-template <class O, std::ranges::input_range R>
-requires std::output_iterator<O, std::byte> && std::ranges::sized_range<R> &&
-  std::same_as<std::ranges::range_value_t<R>, std::byte>
-void encode(O output, const R &value) {
-    const auto size = value.size();
+template <std::output_iterator<std::byte> O, std::ranges::input_range R>
+requires std::ranges::sized_range<R> && std::same_as<std::ranges::range_value_t<R>, std::byte>
+void encode(O &output, const R &value) {
+    encode(output, Type::ByteString, static_cast<uint64_t>(value.size()));
 
-    if (size < 24) {
-        *output = std::byte(2 << 5) | std::byte(size);
-        ++output;
-    } else if (size < 0x100ul) {
-        *output = std::byte(2 << 5) | std::byte(24);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    } else if (size < 0x10000ul) {
-        *output = std::byte(2 << 5) | std::byte(25);
-        ++output;
-        *output = std::byte(size >> 8);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    } else if (size < 0x1000000ul) {
-        *output = std::byte(2 << 5) | std::byte(26);
-        ++output;
-        *output = std::byte(size >> 24);
-        ++output;
-        *output = std::byte(size >> 16);
-        ++output;
-        *output = std::byte(size >> 8);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    } else {
-        *output = std::byte(2 << 5) | std::byte(27);
-        ++output;
-        *output = std::byte(size >> 56);
-        ++output;
-        *output = std::byte(size >> 48);
-        ++output;
-        *output = std::byte(size >> 40);
-        ++output;
-        *output = std::byte(size >> 32);
-        ++output;
-        *output = std::byte(size >> 24);
-        ++output;
-        *output = std::byte(size >> 16);
-        ++output;
-        *output = std::byte(size >> 8);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    }
     std::ranges::copy(value, output);
 }
 
@@ -137,117 +167,94 @@ void encode(O output, const R &value) {
 template <typename T>
 concept Pair = std::tuple_size<T>::value == 2;
 
+/** References an array range
+ */
+template <typename T>
+concept EncodeableRange = requires(const T &t) {
+    encode(std::vector<std::byte>{}.begin(), *t.begin());
+};
+
 /** References a mapping range.
  */
 template <typename T>
 concept EncodeablePairRange = requires(const T &t) {
     requires Pair<std::iter_value_t<std::ranges::iterator_t<T>>>;
 
-    encode(std::vector<std::byte>{}.begin(), std::get<0>(t.begin()));
-    encode(std::vector<std::byte>{}.begin(), std::get<1>(t.begin()));
+    encode(std::vector<std::byte>{}.begin(), std::get<0>(*t.begin()));
+    encode(std::vector<std::byte>{}.begin(), std::get<1>(*t.begin()));
 };
 
-/** Encode a map.
+/** Encode a sized array.
  */
-template <class O, EncodeablePairRange R>
-requires std::output_iterator<O, std::byte> && std::ranges::sized_range<R> &&
-  std::ranges::input_range<R>
-void encode(O output, const R &value) {
-    const auto size = value.size();
-
-    if (size < 24) {
-        *output = std::byte(5 << 5) | std::byte(size);
-        ++output;
-    } else if (size < 0x100ul) {
-        *output = std::byte(5 << 5) | std::byte(24);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    } else if (size < 0x10000ul) {
-        *output = std::byte(5 << 5) | std::byte(25);
-        ++output;
-        *output = std::byte(size >> 8);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    } else if (size < 0x1000000ul) {
-        *output = std::byte(5 << 5) | std::byte(26);
-        ++output;
-        *output = std::byte(size >> 24);
-        ++output;
-        *output = std::byte(size >> 16);
-        ++output;
-        *output = std::byte(size >> 8);
-        ++output;
-        *output = std::byte(size);
-        ++output;
-    } else {
-        *output = std::byte(5 << 5) | std::byte(27);
-        ++output;
-        *output = std::byte(size >> 56);
-        ++output;
-        *output = std::byte(size >> 48);
-        ++output;
-        *output = std::byte(size >> 40);
-        ++output;
-        *output = std::byte(size >> 32);
-        ++output;
-        *output = std::byte(size >> 24);
-        ++output;
-        *output = std::byte(size >> 16);
-        ++output;
-        *output = std::byte(size >> 8);
-        ++output;
-        *output = std::byte(size);
-        ++output;
+template <std::output_iterator<std::byte> O, EncodeableRange R>
+requires std::ranges::sized_range<R> && std::ranges::input_range<R>
+void encode(O &output, const R &value) {
+    encode(output, Type::Array, static_cast<uint64_t>(value.size()));
+    for (const auto &item : value) {
+        encode(output, item);
     }
+}
+
+/** Encode a sized map.
+ */
+template <std::output_iterator<std::byte> O, EncodeablePairRange R>
+requires std::ranges::sized_range<R> && std::ranges::input_range<R>
+void encode(O &output, const R &value) {
+    encode(output, Type::Map, static_cast<uint64_t>(value.size()));
     for (const auto &[k, v] : value) {
         encode(output, k);
         encode(output, v);
     }
 }
 
-template <class O>
-requires std::output_iterator<O, std::byte>
-void encode(O output, const std::int64_t value) {
-    // Only works for two's complement
-    if (value == std::numeric_limits<std::int64_t>::min()) {
-        encode(
-          output,
-          static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1,
-          true);
+template <std::output_iterator<std::byte> O, std::signed_integral I>
+requires (!std::same_as<I, bool>)
+void encode(O &output, const I value) {
+    if (value < 0) {
+        encode(output, Type::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
     } else {
-        encode(output, static_cast<std::uint64_t>(std::abs(value)), value < 0);
+        encode(output, Type::PositiveInteger, static_cast<std::uint64_t>(value));
     }
 }
 
-template <class O>
-requires std::output_iterator<O, std::byte>
-void encode(O output, const std::uint64_t value) {
-    encode(output, value, false);
+template <std::output_iterator<std::byte> O, std::unsigned_integral I>
+requires (!std::same_as<I, bool>)
+void encode(O &output, const I value) {
+    encode(output, Type::PositiveInteger, static_cast<std::uint64_t>(value));
 }
 
-template <class O>
-requires std::output_iterator<O, std::byte>
-void encode(O output, const bool value) {
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const bool value) {
     if (value) {
-        *output = (std::byte(7 << 5) | std::byte(21));
+        encode(output, Type::SpecialFloat, 21);
     } else {
-        *output = (std::byte(7 << 5) | std::byte(20));
+        encode(output, Type::SpecialFloat, 20);
     }
-    ++output;
 }
 
-template <class O>
-requires std::output_iterator<O, std::byte>
-void encode(O output, const std::nullptr_t) {
-    *output = (std::byte(7 << 5) | std::byte(22));
-    ++output;
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Tagged &tagged) {
+    encode(output, Type::SemanticTag, tagged.tag);
+    encode(output, tagged.item);
 }
 
-template <class O, std::floating_point P>
-requires std::output_iterator<O, std::byte>
-inline void encode(O output, const P value) {
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Null) {
+    encode(output, Type::SpecialFloat, 22);
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Undefined) {
+    encode(output, Type::SpecialFloat, 23);
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Break) {
+    encode(output, Type::SpecialFloat, 31);
+}
+
+template <std::output_iterator<std::byte> O, std::floating_point P>
+inline void encode(O &output, const P value) {
     const double d = value;
     const float f = value;
 
@@ -259,8 +266,8 @@ inline void encode(O output, const P value) {
 
     // TODO: float16
     if (static_cast<double>(f) == d) {
-        *output = (std::byte(7 << 5) | std::byte(26));
-        ++output;
+        encode(output, Type::SpecialFloat, 26);
+
         const auto f_ptr = reinterpret_cast<const std::byte *>(&f);
         std::uint32_t bytes{};
         const auto bytes_input_ptr = reinterpret_cast<std::byte *>(&bytes);
@@ -274,8 +281,8 @@ inline void encode(O output, const P value) {
             ++output;
         }
     } else {
-        *output = (std::byte(7 << 5) | std::byte(27));
-        ++output;
+        encode(output, Type::SpecialFloat, 27);
+
         const auto d_ptr = reinterpret_cast<const std::byte *>(&d);
         std::uint64_t bytes{};
         const auto bytes_input_ptr = reinterpret_cast<std::byte *>(&bytes);
@@ -290,5 +297,4 @@ inline void encode(O output, const P value) {
         }
     }
 }
-} // namespace cbor
-} // namespace sard
+} // namespace conbor
