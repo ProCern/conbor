@@ -23,6 +23,10 @@
 #include <vector>
 
 namespace conbor {
+class Value;
+    std::partial_ordering operator<=>(const std::unique_ptr<Value> &, const std::unique_ptr<Value> &) noexcept;
+    bool operator==(const std::unique_ptr<Value> &, const std::unique_ptr<Value> &) noexcept;
+
 class Error : public std::runtime_error {
   public:
     template <class... Args>
@@ -31,7 +35,6 @@ class Error : public std::runtime_error {
     }
 };
 
-class Value;
 
 struct BorrowedByteString {
     std::span<const std::byte> value;
@@ -63,6 +66,14 @@ struct Tagged {
         tag(tag),
         item(std::move(item)) {
     }
+
+    template <class... Args>
+    requires std::constructible_from<Value, Args...>
+    inline Tagged(const std::uint64_t tag, Args &&...args) :
+        tag(tag),
+        item(std::make_unique<Value>(std::forward<Args>(args)...)) {
+    }
+
 
     auto operator<=>(const Tagged &other) const noexcept = default;
 };
@@ -109,30 +120,35 @@ std::tuple<Type, std::uint64_t> read_header(I &input, S last) {
     const auto first_byte = read(input, last);
     const auto type = static_cast<Type>(first_byte >> 5);
     auto count = static_cast<std::uint64_t>(first_byte & std::byte(0b00011111));
-    if (count == 24) {
-        // 8-bit count
-        count = static_cast<std::uint64_t>(read(input, last));
-    } else if (count == 25) {
-        // 16-bit count
-        count = (static_cast<std::uint64_t>(read(input, last)) << 8)
-         | static_cast<std::uint64_t>(read(input, last));
-    } else if (count == 26) {
-        // 32-bit count
-        count = (static_cast<std::uint64_t>(read(input, last)) << 24)
-            | (static_cast<std::uint64_t>(read(input, last)) << 16)
-            | (static_cast<std::uint64_t>(read(input, last)) << 8)
-            | static_cast<std::uint64_t>(read(input, last));
-    } else if (count == 27) {
-        // 64-bit count
-        count =
-            (static_cast<std::uint64_t>(read(input, last)) << 56)
-            | (static_cast<std::uint64_t>(read(input, last)) << 48)
-            | (static_cast<std::uint64_t>(read(input, last)) << 40)
-            | (static_cast<std::uint64_t>(read(input, last)) << 32)
-            | (static_cast<std::uint64_t>(read(input, last)) << 24)
-            | (static_cast<std::uint64_t>(read(input, last)) << 16)
-            | (static_cast<std::uint64_t>(read(input, last)) << 8)
-            | static_cast<std::uint64_t>(read(input, last));
+
+    // Specialfloat just gets the count it read.  Additional processing is
+    // special.
+    if (type != Type::SpecialFloat) {
+        if (count == 24) {
+            // 8-bit count
+            count = static_cast<std::uint64_t>(read(input, last));
+        } else if (count == 25) {
+            // 16-bit count
+            count = (static_cast<std::uint64_t>(read(input, last)) << 8)
+                | static_cast<std::uint64_t>(read(input, last));
+        } else if (count == 26) {
+            // 32-bit count
+            count = (static_cast<std::uint64_t>(read(input, last)) << 24)
+                | (static_cast<std::uint64_t>(read(input, last)) << 16)
+                | (static_cast<std::uint64_t>(read(input, last)) << 8)
+                | static_cast<std::uint64_t>(read(input, last));
+        } else if (count == 27) {
+            // 64-bit count
+            count =
+                (static_cast<std::uint64_t>(read(input, last)) << 56)
+                | (static_cast<std::uint64_t>(read(input, last)) << 48)
+                | (static_cast<std::uint64_t>(read(input, last)) << 40)
+                | (static_cast<std::uint64_t>(read(input, last)) << 32)
+                | (static_cast<std::uint64_t>(read(input, last)) << 24)
+                | (static_cast<std::uint64_t>(read(input, last)) << 16)
+                | (static_cast<std::uint64_t>(read(input, last)) << 8)
+                | static_cast<std::uint64_t>(read(input, last));
+        }
     }
 
     return {type, count};
@@ -147,7 +163,9 @@ template <std::output_iterator<std::byte> O>
 void encode(O &output, const Type type, const std::uint64_t count) {
     const auto type_byte = std::byte(static_cast<std::uint8_t>(type) << 5);
 
-    if (count < 24 || (type == Type::SpecialFloat && count == 31)) {
+    // SpecialFloat always just encodes the count you give it directly.  Any
+    // additional special stuff you have to do yourself.
+    if (count < 24 || type == Type::SpecialFloat) {
         *output = (type_byte | std::byte(count));
         ++output;
     } else if (count < 0x100ull) {

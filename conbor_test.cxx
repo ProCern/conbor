@@ -16,7 +16,7 @@ TEST(BuildValue, Equality) {
 
 TEST(Encoding, Tagged) {
     EXPECT_EQ(
-      conbor::Value(conbor::Tagged(55799, std::make_unique<conbor::Value>(true))).encoded(),
+      conbor::Value(conbor::Tagged(55799, true)).encoded(),
       (std::vector<std::byte>{
         std::byte(0xd9),
         std::byte(0xd9),
@@ -257,4 +257,49 @@ TEST(Decoding, NegativeInteger) {
         std::byte(0),
         std::byte(0)})))
       << "8 byte negative int";
+}
+
+TEST(Decoding, Tagged) {
+    EXPECT_EQ(
+      conbor::Value(conbor::Tagged(55799, true)),
+      (conbor::Value::decoded(std::vector<std::byte>{
+        std::byte(0xd9),
+        std::byte(0xd9),
+        std::byte(0xf7),
+        std::byte(7 << 5) | std::byte(21)})))
+      << "conbor tagged true";
+}
+
+TEST(Decoding, Specials) {
+    EXPECT_EQ(
+      conbor::Value(false).encoded(),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(20)}).encoded())
+      << "boolean false";
+    EXPECT_EQ(
+      conbor::Value(false),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(20)}))
+      << "boolean false";
+    EXPECT_EQ(
+      conbor::Value(true),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(21)}))
+      << "boolean true";
+    EXPECT_EQ(
+      conbor::Value(conbor::Null{}),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}))
+      << "null";
+    EXPECT_EQ(
+      conbor::Value(nullptr),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}))
+      << "nullptr null";
+    EXPECT_EQ(
+      conbor::Value(conbor::Undefined{}),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(23)}))
+      << "undefined";
+    EXPECT_EQ(conbor::Value(),
+            conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(23)}))
+      << "default undefined";
+    EXPECT_EQ(
+      conbor::Value(conbor::Break{}),
+      conbor::Value::decoded(std::vector<std::byte>{std::byte(7 << 5) | std::byte(31)}))
+      << "break";
 }

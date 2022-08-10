@@ -5,11 +5,13 @@
 
 #include "cbor.hxx"
 #include <compare>
+#include <iostream>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -53,6 +55,7 @@ class Value {
       // borrowed string
       std::u8string_view,
       std::vector<std::unique_ptr<Value>>,
+      // map
       std::map<std::unique_ptr<Value>, std::unique_ptr<Value>>,
       Tagged,
       bool,
@@ -85,20 +88,49 @@ class Value {
     // Decode, which either borrows or takes ownership.
     template <std::input_iterator I, std::sentinel_for<I> S>
         requires std::same_as<std::iter_value_t<I>, std::byte>
-    void decode(I input, S last) {
+    void decode(I &input, S last) {
         conbor::Type type{};
         std::uint64_t count;
         std::tie(type, count) = read_header(input, last);
 
         using enum conbor::Type;
         switch (type) {
-            case conbor::Type::PositiveInteger: {
+            case PositiveInteger: {
                 value = static_cast<std::int64_t>(count);
                 break;
             }
 
-            case conbor::Type::NegativeInteger: {
+            case NegativeInteger: {
                 value = -static_cast<std::int64_t>(count) - 1;
+                break;
+            }
+
+            case SemanticTag: {
+                value = Tagged(count, Value::decoded(input, last));
+                break;
+            }
+
+            case SpecialFloat: {
+                switch (count) {
+                    case 20:
+                        value = false;
+                        break;
+                    case 21:
+                        value = true;
+                        break;
+                    case 22:
+                        value = Null{};
+                        break;
+                    case 23:
+                        value = Undefined{};
+                        break;
+                        // TODO: floats
+                    case 31:
+                        value = Break{};
+                        break;
+                    default:
+                        throw Error("Illegal Special count number");
+                }
                 break;
             }
 
@@ -110,7 +142,7 @@ class Value {
 
     template <std::input_iterator I, std::sentinel_for<I> S>
         requires std::same_as<std::iter_value_t<I>, std::byte>
-    static inline Value decoded(I input, S last) {
+    static inline Value decoded(I &input, S last) {
         Value output;
         output.decode(input, last);
         return output;
@@ -120,11 +152,46 @@ class Value {
         requires std::same_as<std::ranges::range_value_t<I>, std::byte>
     static inline Value decoded(I &&input) {
         Value output;
-        output.decode(input.begin(), input.end());
+        auto begin = std::ranges::begin(input);
+        auto end = std::ranges::end(input);
+        output.decode(begin, end);
         return output;
     }
 
+    constexpr bool undefined() const noexcept {
+        return std::holds_alternative<Undefined>(value);
+    }
+
+    constexpr std::optional<std::int64_t> integer() const noexcept {
+        if (std::holds_alternative<std::int64_t>(value)) {
+            return std::get<std::int64_t>(value);
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    constexpr std::optional<std::span<const std::byte>> byte_string() const noexcept {
+        if (std::holds_alternative<std::vector<std::byte>>(value)) {
+            return std::span<const std::byte>(std::get<std::vector<std::byte>>(value));
+        } else if (std::holds_alternative<BorrowedByteString>(value)) {
+            return std::get<BorrowedByteString>(value).value;
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    constexpr std::optional<std::u8string_view> u8string() const noexcept {
+        if (std::holds_alternative<std::u8string_view>(value)) {
+            return std::get<std::u8string_view>(value);
+        } else if (std::holds_alternative<std::u8string>(value)) {
+            return std::u8string_view(std::get<std::u8string>(value));
+        } else {
+            return std::nullopt;
+        }
+    }
+
     constexpr auto operator<=>(const Value &other) const noexcept = default;
+    constexpr bool operator==(const Value &other) const noexcept = default;
 };
 
 /** Encode a pointer to a Value.
@@ -148,4 +215,24 @@ template <std::output_iterator<std::byte> O, DereferencesTo<const Value &> I>
 void encode(O &output, const I &value) {
     encode(output, *value);
 }
+
+/** Comparing unique pointers of values should actually compare the contents.
+ */
+    std::partial_ordering operator<=>(const std::unique_ptr<Value> &first, const std::unique_ptr<Value> &second) noexcept {
+        if (first && second) {
+            return (*first) <=> (*second);
+        } else {
+            return first.get() <=> second.get();
+        }
+    }
+
+/** Comparing unique pointers of values should actually compare the contents.
+ */
+    bool operator==(const std::unique_ptr<Value> &first, const std::unique_ptr<Value> &second) noexcept {
+        if (first && second) {
+            return (*first) == (*second);
+        } else {
+            return first.get() == second.get();
+        }
+    }
 } // namespace conbor
