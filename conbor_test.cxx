@@ -223,3 +223,38 @@ std::byte(24)})))
         std::byte(0)})))
       << "8 byte positive int";
 }
+
+TEST(Decoding, NegativeInteger) {
+    EXPECT_EQ(conbor::Value(-6), conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(5)}))
+      << "tiny negative int";
+    EXPECT_EQ(
+      conbor::Value(-25),
+      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(24), std::byte(24)})))
+      << "1 byte negative int";
+    EXPECT_EQ(
+      conbor::Value(-257),
+      (conbor::Value::decoded(std::vector<std::byte>{std::byte(1 << 5) | std::byte(25), std::byte(1), std::byte(0)})))
+      << "2 byte negative int";
+    EXPECT_EQ(
+      conbor::Value(-65537),
+      (conbor::Value::decoded(std::vector<std::byte>{
+        std::byte(1 << 5) | std::byte(26),
+        std::byte(0),
+        std::byte(1),
+        std::byte(0),
+        std::byte(0)})))
+      << "4 byte negative int";
+    EXPECT_EQ(
+      conbor::Value(-4294967297),
+      (conbor::Value::decoded(std::vector<std::byte>{
+        std::byte(1 << 5) | std::byte(27),
+        std::byte(0),
+        std::byte(0),
+        std::byte(0),
+        std::byte(1),
+        std::byte(0),
+        std::byte(0),
+        std::byte(0),
+        std::byte(0)})))
+      << "8 byte negative int";
+}

@@ -82,6 +82,7 @@ class Value {
         return output;
     }
 
+    // Decode, which either borrows or takes ownership.
     template <std::input_iterator I, std::sentinel_for<I> S>
         requires std::same_as<std::iter_value_t<I>, std::byte>
     void decode(I input, S last) {
@@ -100,6 +101,7 @@ class Value {
                 value = -static_cast<std::int64_t>(count) - 1;
                 break;
             }
+
             default:
                 // Not implemented yet
                 std::terminate();
