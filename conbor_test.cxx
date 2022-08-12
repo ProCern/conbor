@@ -102,12 +102,11 @@ TEST(Encoding, String) {
 }
 
 TEST(Encoding, Array) {
-    std::vector<std::u8string> array;
-    array.push_back(u8"1337");
-    array.push_back(u8"6969");
-
     EXPECT_EQ(
-      conbor::to_cbor(array),
+      conbor::to_cbor(std::vector<std::u8string>{
+          u8"1337",
+          u8"6969",
+          }),
 
       (std::vector<std::byte>{
         // Header
@@ -125,8 +124,145 @@ TEST(Encoding, Array) {
         std::byte('6'),
         std::byte('9'),
       }));
+
+    EXPECT_EQ(
+      conbor::to_cbor(std::vector<std::vector<std::u8string>>{
+          {u8"1337"},
+          {u8"6969"},
+          }),
+
+      (std::vector<std::byte>{
+        // Header
+        std::byte(4 << 5) | std::byte(2),
+        // Header
+        std::byte(4 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // Header
+        std::byte(4 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+      }));
 }
 
+TEST(Encoding, Map) {
+    EXPECT_EQ(
+      conbor::to_cbor(std::map<std::u8string, std::u8string>{
+          {u8"1337",
+          u8"6969",
+          }
+          }),
+
+      (std::vector<std::byte>{
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+      }));
+
+    EXPECT_EQ(
+      conbor::to_cbor(std::map<std::map<std::u8string, std::u8string>, std::map<std::u8string, std::u8string>>{
+              {{{u8"1337", u8"6969"}}, {{u8"foo", u8"bar"}}},
+          }),
+
+      (std::vector<std::byte>{
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('f'),
+        std::byte('o'),
+        std::byte('o'),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('b'),
+        std::byte('a'),
+        std::byte('r'),
+      }));
+}
+
+TEST(Encoding, MapArrayMixedRecursive) {
+    EXPECT_EQ(
+      conbor::to_cbor(std::vector<std::map<std::vector<std::u8string>, std::vector<std::u8string>>>{
+          // Vector Item as a map
+          {
+              // map item
+              {
+                  // key is a vector
+                  {u8"1337", u8"6969"},
+                  // value is a vector
+                  {u8"foo", u8"bar"},
+              }
+          }
+          }),
+
+      (std::vector<std::byte>{
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
+        // Map Header
+        std::byte(5 << 5) | std::byte(1),
+        // Array Header
+        std::byte(4 << 5) | std::byte(2),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+        // Array Header
+        std::byte(4 << 5) | std::byte(2),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('f'),
+        std::byte('o'),
+        std::byte('o'),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('b'),
+        std::byte('a'),
+        std::byte('r'),
+      }));
+}
 
 /*TEST(BuildValue, Equality) {
     EXPECT_EQ(

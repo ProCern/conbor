@@ -24,8 +24,58 @@
 #include <vector>
 
 namespace conbor {
+    /** Struct to force ACL for internal types.
+     */
     struct Adl {
     };
+
+/** A type that can be encoded to cbor.
+ */
+template <typename T, typename O>
+concept ToCborInternal = requires(const T &t, O o, Adl adl) {
+    requires std::output_iterator<O, std::byte>;
+
+    { to_cbor(o, t, adl) } -> std::same_as<O>;
+};
+
+/** A type that can be encoded to cbor.
+ */
+template <typename T, typename O>
+concept ToCborExternal = requires(const T &t, O o) {
+    requires std::output_iterator<O, std::byte>;
+
+    { to_cbor(o, t) } -> std::same_as<O>;
+};
+
+template <typename T, typename O>
+concept ToCbor = requires(const T &t, O o) {
+    requires ToCborExternal<T, O> || ToCborInternal<T, O>;
+};
+
+
+/** Pair concept.
+ */
+template <typename T>
+concept Pair = std::tuple_size<T>::value == 2;
+
+/** Constrains an array range
+ */
+template <typename T, typename O>
+concept ToCborRange = requires {
+    requires std::ranges::input_range<T>;
+    requires ToCbor<std::ranges::range_value_t<T>, O>;
+};
+
+/** Constrains a mapping range.
+ */
+template <typename T, typename O>
+concept ToCborPairRange = requires {
+    requires std::ranges::input_range<T>;
+    requires Pair<std::ranges::range_value_t<T>>;
+    requires ToCbor<typename std::tuple_element<0, std::ranges::range_value_t<T>>::type, O>;
+    requires ToCbor<typename std::tuple_element<1, std::ranges::range_value_t<T>>::type, O>;
+};
+
 
 /** Default error type.
  */
@@ -269,7 +319,7 @@ O write_header(O output, const MajorType type, const std::uint64_t count) {
  */
 template <std::output_iterator<std::byte> O, std::ranges::input_range R>
 requires std::ranges::sized_range<R> && std::same_as<std::ranges::range_value_t<R>, std::byte>
-O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     output = write_header(output, MajorType::ByteString, static_cast<uint64_t>(value.size()));
 
     return std::ranges::copy(value, output).out;
@@ -284,7 +334,7 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
  */
 template <std::output_iterator<std::byte> O, std::ranges::input_range R>
 requires std::ranges::sized_range<R> && (std::same_as < std::ranges::range_value_t<R>, char8_t > || std::same_as < std::ranges::range_value_t<R>, char >)
-O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     output = write_header(output, MajorType::Utf8String, static_cast<uint64_t>(value.size()));
 
     return std::ranges::copy(
@@ -297,7 +347,7 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
 // Signed integer
 template <std::output_iterator<std::byte> O, std::signed_integral I>
 requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, char8_t>)
-    O to_cbor(O output, const I value, [[maybe_unused]] Adl adl = Adl{}) {
+    O to_cbor(O output, const I value, [[maybe_unused]] Adl adl) {
     if (value < 0) {
         return write_header(output, MajorType::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
     } else {
@@ -308,7 +358,7 @@ requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_
 // Unsigned integer
 template <std::output_iterator<std::byte> O, std::unsigned_integral I>
 requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, char8_t>)
-O to_cbor(O output, const I value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const I value, [[maybe_unused]] Adl adl) {
     return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
 }
 
@@ -316,17 +366,17 @@ O to_cbor(O output, const I value, [[maybe_unused]] Adl adl = Adl{}) {
 // Don't want it to automatically coerce to bool, so only literal bool types are
 // valid here.
 template <std::output_iterator<std::byte> O>
-O to_cbor(O output, const std::same_as<bool> auto value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const std::same_as<bool> auto value, [[maybe_unused]] Adl adl) {
     return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<0>, value ? 21 : 20)});
 }
 
 template <std::output_iterator<std::byte> O>
-O to_cbor(O output, const std::nullptr_t, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const std::nullptr_t, [[maybe_unused]] Adl adl) {
     return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<0>, 22)});
 }
 
 template <std::output_iterator<std::byte> O>
-O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl adl) {
     const double d = value;
     const float f = value;
 
@@ -363,53 +413,21 @@ O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl a
     }
 }
 
-/** A type that can be encoded to cbor.
- */
-template <typename T, typename O>
-concept ToCbor = requires(const T &t, O o) {
-    requires std::output_iterator<O, std::byte>;
-
-    { to_cbor(o, t) } -> std::same_as<O>;
-};
-
-/** Pair concept.
- */
-template <typename T>
-concept Pair = std::tuple_size<T>::value == 2;
-
-/** Constrains an array range
- */
-template <typename T, typename O>
-concept ToCborRange = requires {
-    requires std::ranges::input_range<T>;
-    requires ToCbor<std::ranges::range_value_t<T>, O>;
-};
-
-/** Constrains a mapping range.
- */
-template <typename T, typename O>
-concept ToCborPairRange = requires {
-    requires std::ranges::input_range<T>;
-    requires Pair<std::ranges::range_value_t<T>>;
-    requires ToCbor<std::tuple_element<0, std::ranges::range_value_t<T>>, O>;
-    requires ToCbor<std::tuple_element<1, std::ranges::range_value_t<T>>, O>;
-};
-
-// Forward declare, in case we have nested arrays and maps.
-template <std::output_iterator<std::byte> O, ToCborPairRange<O> R>
-O to_cbor(O output, const R &value);
-
 /** Encode an array.
  */
 template <std::output_iterator<std::byte> O, ToCborRange<O> R>
-O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     if constexpr (std::ranges::sized_range<R>) {
         output = write_header(output, MajorType::Array, static_cast<std::uint64_t>(value.size()));
     } else {
         output = write_header(output, Header{MajorType::Array, Count(std::in_place_index<0>, 31)});
     }
     for (const auto &item : value) {
-        output = to_cbor(output, item);
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(item)>>, O>) {
+            output = to_cbor(output, item, adl);
+        } else {
+            output = to_cbor(output, item);
+        }
     }
     if constexpr (!std::ranges::sized_range<R>) {
         output = write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<0>, 31)});
@@ -420,15 +438,23 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
 /** Encode a sized map.
  */
 template <std::output_iterator<std::byte> O, ToCborPairRange<O> R>
-O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
+O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     if constexpr (std::ranges::sized_range<R>) {
         output = write_header(output, MajorType::Map, static_cast<std::uint64_t>(value.size()));
     } else {
         output = write_header(output, Header{MajorType::Map, Count(std::in_place_index<0>, 31)});
     }
     for (const auto &[k, v] : value) {
-        output = to_cbor(output, k);
-        output = to_cbor(output, v);
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(k)>>, O>) {
+            output = to_cbor(output, k, adl);
+        } else {
+            output = to_cbor(output, k);
+        }
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(v)>>, O>) {
+            output = to_cbor(output, v, adl);
+        } else {
+            output = to_cbor(output, v);
+        }
     }
 
     if constexpr (!std::ranges::sized_range<R>) {
@@ -438,12 +464,19 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl = Adl{}) {
     return output;
 }
 
+/** Encode an internal cbor value and automatically invoke ADL
+ */
+template <std::output_iterator<std::byte> O, ToCborInternal<O> T>
+O to_cbor(O output, const T &value) {
+    return to_cbor(output, value, Adl{});
+}
+
 
 /** Special to_cbor convenience function that just encodes to and outputs a vector of bytes.
  */
 template <class T>
 requires ToCbor<T, std::back_insert_iterator<std::vector<std::byte>>>
-std::vector<std::byte> to_cbor(const T &value, [[maybe_unused]] Adl adl = Adl{}) {
+std::vector<std::byte> to_cbor(const T &value) {
     std::vector<std::byte> output;
     to_cbor(std::back_inserter(output), value);
     return output;
