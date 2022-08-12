@@ -1,0 +1,414 @@
+/* Copyright © 2022 Taylor C. Richberger
+ * This code is released under the license described in the LICENSE file
+ */
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <bitset>
+#include <cmath>
+#include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <ranges>
+#include <span>
+#include <stdexcept>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+namespace conbor {
+/** Default error type.
+ */
+class Error : public std::runtime_error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<std::runtime_error, Args...> Error(Args &&...t) :
+        runtime_error(std::forward<Args>(t)...) {
+    }
+};
+
+/** End of input error.
+ */
+class EndOfInput : public Error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> EndOfInput(Args &&...t) :
+        Error(std::forward<Args>(t)...) {
+    }
+};
+
+/** Illegal SpecialFloat count
+ */
+class IllegalSpecialFloatCount : public Error {
+    private:
+        std::uint64_t count_;
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> IllegalSpecialFloatCount(std::uint64_t count, Args &&...t) :
+        Error(std::forward<Args>(t)...), count_(count) {
+    }
+
+    constexpr std::uint64_t count() const noexcept {
+        return count_;
+    }
+};
+
+/** Read a single byte, returning an error if input == last.
+ */
+template <
+  std::input_iterator I,
+  std::sentinel_for<I> S,
+  requires std::same_as<std::iter_value_t<I>, std::byte>
+inline std::byte read(I &input, S last) {
+    if (input == last) {
+        throw EndOfInput("Reached end of input early");
+    }
+    const std::byte output = *input;
+    ++input;
+    return output;
+}
+
+/** The major type read from the header.
+ */
+enum class MajorType {
+    PositiveInteger = 0,
+    NegativeInteger = 1,
+    ByteString = 2,
+    Utf8String = 3,
+    Array = 4,
+    Map = 5,
+    SemanticTag = 6,
+    SpecialFloat = 7
+};
+
+/** The count read from the header.  If the count is 24-27, the extended count
+ * field is delivered in one of the last four variants, otherwise, it is simply
+ * the first variant.
+ */
+using Count = std::variant<std::uint8_t, std::uint8_t, std::uint16_t, std::uint32_t, std::uint64_t>;
+
+using Header = std::tuple<MajorType, Count>;
+
+template <
+  std::input_iterator I,
+  std::sentinel_for<I> S,
+  requires std::same_as<std::iter_value_t<I>, std::byte> Header read_header(I &input, S last) {
+
+    const auto byte = read(input, last);
+    const auto type = static_cast<MajorType>(byte >> 5);
+    const auto tinycount = static_cast<std::uint8_t>(byte & std::byte(0b00011111));
+
+    switch (tinycount) {
+    case 24:
+        return Header{type, Count(std::in_place_index<1>, static_cast<uint8_t>(read(input, last)))};
+
+    case 25: {
+        uint16_t count = 0;
+        for (size_t i = 0; i < sizeof(count); ++i) {
+            count = (count << 8) | static_cast<decltype(count)>(read(input, last));
+        }
+        return Header{type, Count(std::in_place_index<2>, count)};
+    }
+
+    case 26: {
+        uint32_t count = 0;
+        for (size_t i = 0; i < sizeof(count); ++i) {
+            count = (count << 8) | static_cast<decltype(count)>(read(input, last));
+        }
+        return Header{type, Count(std::in_place_index<3>, count)};
+    }
+
+    case 27: {
+        uint64_t count = 0;
+        for (size_t i = 0; i < sizeof(count); ++i) {
+            count = (count << 8) | static_cast<decltype(count)>(read(input, last));
+        }
+        return Header{type, Count(std::in_place_index<4>, count)};
+    }
+
+    default:
+        return Header{type, Count(std::in_place_index<0>, tinycount)};
+    }
+}
+
+/** Write the header.
+ */
+template <std::output_iterator<std::byte>>
+void write_header(O &output, const Header header) {
+    const[type, count] = header;
+
+    const auto type_byte = std::byte(static_cast<std::uint8_t>(type) << 5);
+
+    switch (count.index) {
+    case 0: {
+        *output = (type_byte | std::byte(std::get<0>(count)));
+        ++output;
+        break;
+    }
+    case 1: {
+        *output = (type_byte | std::byte(24));
+        ++output;
+        *output = std::byte(std::get<1>(count));
+        ++output;
+        break;
+    }
+    case 2: {
+        *output = (type_byte | std::byte(25));
+        ++output;
+        const auto inner_count = std::get<2>(count);
+        for (size_t i = 0; i < sizeof(inner_count); ++i) {
+            *output = std::byte(inner_count >> ((sizeof(inner_count) - 1 - i) * 8));
+            ++output;
+        }
+        break;
+    }
+    case 3: {
+        *output = (type_byte | std::byte(26));
+        ++output;
+        const auto inner_count = std::get<3>(count);
+        for (size_t i = 0; i < sizeof(inner_count); ++i) {
+            *output = std::byte(inner_count >> ((sizeof(inner_count) - 1 - i) * 8));
+            ++output;
+        }
+        break;
+    }
+    case 4: {
+        *output = (type_byte | std::byte(27));
+        ++output;
+        const auto inner_count = std::get<4>(count);
+        for (size_t i = 0; i < sizeof(inner_count); ++i) {
+            *output = std::byte(inner_count >> ((sizeof(inner_count) - 1 - i) * 8));
+            ++output;
+        }
+        break;
+    }
+
+    default:
+        // __builtin_unreachable() or std::unreachable()
+        std::terminate();
+    }
+}
+
+/** Write the header.
+ *
+ * For all types, if the count is <24, outputs the tiny header.
+ * For SpecialFloat, if the count is 31, outputs the tiny header.
+ * For SpecialFloat, if the count is >=25 but not 31, throws an error.  This
+ * means that for floating point numbers, you have to output your own type
+ * encoded properly.
+ * For non-SpecialFloat, if the count is >=24, ouputs the smallest appropriate multi-byte header.
+ */
+template <std::output_iterator<std::byte> O>
+void write_header(O &output, const MajorType type, const std::uint64_t count) {
+    // SpecialFloat always just encodes the count you give it directly.  Any
+    // additional special stuff, like floats, you have to do yourself.
+    if (count < 24 || (type == MajorType::SpecialFloat && count == 31)) {
+        write_header(
+          output,
+          Header{type, Count(std::in_place_index<0>, static_cast<std::uint8_t>(count))});
+    } else if (type == MajorType::SpecialFloat) {
+        throw IllegalSpecialFloatCount(count, "Illegal SpecialFloat count");
+    } else if (count < 0x100ull) {
+        write_header(
+          output,
+          Header{type, Count(std::in_place_index<1>, static_cast<std::uint8_t>(count))});
+    } else if (count < 0x10000ull) {
+        write_header(
+          output,
+          Header{type, Count(std::in_place_index<2>, static_cast<std::uint16_t>(count))});
+    } else if (count < 0x1000000ull) {
+        write_header(
+          output,
+          Header{type, Count(std::in_place_index<3>, static_cast<std::uint32_t>(count))});
+    } else {
+        write_header(output, Header{type, Count(std::in_place_index<4>, count)});
+    }
+}
+
+/** A type that can be encoded to cbor with possible error type E.
+ */
+template <typename T, typename O, typename E>
+concept ToCbor = requires(const T &t, O o) {
+    requires std::constructible_from<E, const char *>;
+    requires std::output_iterator<O, std::byte>;
+    to_cbori<O, E>(o, t);
+};
+
+/** Encode the byte string.
+ */
+template <std::output_iterator<std::byte> O, std::ranges::input_range R>
+requires std::ranges::sized_range<R> && std::same_as<std::ranges::range_value_t<R>, std::byte>
+void encode(O &output, const R &value) {
+    encode(output, MajorType::ByteString, static_cast<uint64_t>(value.size()));
+
+    std::ranges::copy(value, output);
+}
+
+/** Encode the borrowed byte string.
+ */
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const BorrowedByteString &value) {
+    encode(output, value.value);
+}
+
+/** Encode the utf8 string.
+ */
+template <std::output_iterator<std::byte> O, std::ranges::input_range R>
+requires std::ranges::sized_range<R> && std::same_as < std::ranges::range_value_t<R>,
+char8_t > void encode(O &output, const R &value) {
+    encode(output, MajorType::Utf8String, static_cast<uint64_t>(value.size()));
+
+    std::ranges::copy(
+      value | std::views::transform([](const char8_t c) {
+          return std::byte(c);
+      }),
+      output);
+}
+
+/** Pair concept.
+ */
+template <typename T>
+concept Pair = std::tuple_size<T>::value == 2;
+
+/** References an array range
+ */
+template <typename T>
+concept EncodeableRange = requires(const T &t, std::byte *o) {
+    requires std::ranges::input_range<T>;
+    encode(o, *std::ranges::begin(t));
+};
+
+/** References a mapping range.
+ */
+template <typename T>
+concept EncodeablePairRange = requires(const T &t, std::byte *o) {
+    requires std::ranges::input_range<T>;
+    requires Pair<std::iter_value_t<std::ranges::iterator_t<T>>>;
+
+    encode(o, std::get<0>(*std::ranges::begin(t)));
+    encode(o, std::get<1>(*std::ranges::begin(t)));
+};
+
+/** Encode a sized array.
+ */
+template <std::output_iterator<std::byte> O, EncodeableRange R>
+requires std::ranges::sized_range<R>
+void encode(O &output, const R &value) {
+    encode(output, MajorType::Array, static_cast<uint64_t>(value.size()));
+    for (const auto &item : value) {
+        encode(output, item);
+    }
+}
+
+/** Encode a sized map.
+ */
+template <std::output_iterator<std::byte> O, EncodeablePairRange R>
+requires std::ranges::sized_range<R>
+void encode(O &output, const R &value) {
+    encode(output, MajorType::Map, static_cast<uint64_t>(value.size()));
+    for (const auto &[k, v] : value) {
+        encode(output, k);
+        encode(output, v);
+    }
+}
+
+template <std::output_iterator<std::byte> O, std::signed_integral I>
+requires(!std::same_as<I, bool>) &&
+  (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, signed char>)&&(
+    !std::same_as<I, unsigned char>)void encode(O &output, const I value) {
+    if (value < 0) {
+        encode(output, MajorType::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
+    } else {
+        encode(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
+    }
+}
+
+template <std::output_iterator<std::byte> O, std::unsigned_integral I>
+requires(!std::same_as<I, bool>) &&
+  (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, signed char>)&&(
+    !std::same_as<I, unsigned char>)void encode(O &output, const I value) {
+    encode(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const bool value) {
+    if (value) {
+        encode(output, MajorType::SpecialFloat, 21);
+    } else {
+        encode(output, MajorType::SpecialFloat, 20);
+    }
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Tagged &tagged) {
+    encode(output, MajorType::SemanticTag, tagged.tag);
+    encode(output, tagged.item);
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Null) {
+    encode(output, MajorType::SpecialFloat, 22);
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Undefined) {
+    encode(output, MajorType::SpecialFloat, 23);
+}
+
+template <std::output_iterator<std::byte> O>
+void encode(O &output, const Break) {
+    encode(output, MajorType::SpecialFloat, 31);
+}
+
+template <std::output_iterator<std::byte> O, std::floating_point P>
+inline void encode(O &output, const P value) {
+    const double d = value;
+    const float f = value;
+
+    static_assert(sizeof(float) == 4, "floats must be 4 bytes");
+    static_assert(sizeof(double) == 8, "doubles must be 8 bytes");
+    static_assert(
+      std::endian::native == std::endian::big || std::endian::native == std::endian::little,
+      "mixed endian architectures can not be supported yet");
+
+    // TODO: float16
+    if (static_cast<double>(f) == d) {
+        encode(output, MajorType::SpecialFloat, 26);
+
+        const auto f_ptr = reinterpret_cast<const std::byte *>(&f);
+        std::uint32_t bytes{};
+        const auto bytes_input_ptr = reinterpret_cast<std::byte *>(&bytes);
+        // As long as ints and floats have the same byte order, this will always
+        // output bytes big-endian.
+        for (size_t i = 0; i < sizeof(f); ++i) {
+            bytes_input_ptr[i] = f_ptr[i];
+        }
+        for (size_t i = 0; i < sizeof(bytes); ++i) {
+            *output = static_cast<std::byte>(bytes >> ((sizeof(bytes) - 1 - i) * 8));
+            ++output;
+        }
+    } else {
+        encode(output, MajorType::SpecialFloat, 27);
+
+        const auto d_ptr = reinterpret_cast<const std::byte *>(&d);
+        std::uint64_t bytes{};
+        const auto bytes_input_ptr = reinterpret_cast<std::byte *>(&bytes);
+        // As long as ints and floats have the same byte order, this will always
+        // output bytes big-endian.
+        for (size_t i = 0; i < sizeof(d); ++i) {
+            bytes_input_ptr[i] = d_ptr[i];
+        }
+        for (size_t i = 0; i < sizeof(bytes); ++i) {
+            *output = static_cast<std::byte>(bytes >> ((sizeof(bytes) - 1 - i) * 8));
+            ++output;
+        }
+    }
+}
+} // namespace conbor

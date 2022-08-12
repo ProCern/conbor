@@ -5,14 +5,14 @@
 
 #include "cbor.hxx"
 #include <compare>
-#include <iostream>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <iterator>
 #include <map>
-#include <optional>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -22,6 +22,66 @@
 #include <vector>
 
 namespace conbor {
+class Value;
+
+struct BorrowedByteString {
+    std::span<const std::byte> value;
+
+    // Why isn't std::span ordered already?  std::vector is.  Weird.
+    constexpr std::strong_ordering operator<=>(const BorrowedByteString &other) const noexcept {
+        return std::basic_string_view<std::byte>(value.data(), value.size()) <=>
+          std::basic_string_view<std::byte>(other.value.data(), other.value.size());
+    }
+
+    template <class... Args>
+    requires std::constructible_from<std::span<const std::byte>, Args...>
+    constexpr BorrowedByteString(Args &&...args) : value(std::forward<Args>(args)...) {
+    }
+
+    constexpr bool operator==(const BorrowedByteString &other) const noexcept {
+        return std::basic_string_view<std::byte>(value.data(), value.size()) ==
+          std::basic_string_view<std::byte>(other.value.data(), other.value.size());
+    }
+};
+
+struct Tagged {
+    std::uint64_t tag{};
+    std::unique_ptr<Value> item;
+
+    constexpr Tagged() noexcept = default;
+
+    inline Tagged(const std::uint64_t tag, std::unique_ptr<Value> item) :
+        tag(tag),
+        item(std::move(item)) {
+    }
+
+    template <class... Args>
+    requires std::constructible_from<Value, Args...>
+    inline Tagged(const std::uint64_t tag, Args &&...args) :
+        tag(tag),
+        item(std::make_unique<Value>(std::forward<Args>(args)...)) {
+    }
+
+    auto operator<=>(const Tagged &other) const noexcept = default;
+};
+
+struct Undefined {
+    auto operator<=>(const Undefined &other) const noexcept = default;
+};
+
+struct Null {
+    auto operator<=>(const Null &other) const noexcept = default;
+};
+
+struct Break {
+    auto operator<=>(const Break &other) const noexcept = default;
+};
+
+std::partial_ordering operator<=>(
+  const std::unique_ptr<Value> &,
+  const std::unique_ptr<Value> &) noexcept;
+bool operator==(const std::unique_ptr<Value> &, const std::unique_ptr<Value> &) noexcept;
+
 template <typename T, typename D>
 concept DereferencesTo = requires(const T &t) {
     { *t } -> std::convertible_to<D>;
@@ -87,7 +147,7 @@ class Value {
 
     // Decode, which either borrows or takes ownership.
     template <std::input_iterator I, std::sentinel_for<I> S>
-        requires std::same_as<std::iter_value_t<I>, std::byte>
+    requires std::same_as<std::iter_value_t<I>, std::byte>
     void decode(I &input, S last) {
         conbor::Type type{};
         std::uint64_t count;
@@ -95,53 +155,53 @@ class Value {
 
         using enum conbor::Type;
         switch (type) {
-            case PositiveInteger: {
-                value = static_cast<std::int64_t>(count);
-                break;
-            }
+        case PositiveInteger: {
+            value = static_cast<std::int64_t>(count);
+            break;
+        }
 
-            case NegativeInteger: {
-                value = -static_cast<std::int64_t>(count) - 1;
-                break;
-            }
+        case NegativeInteger: {
+            value = -static_cast<std::int64_t>(count) - 1;
+            break;
+        }
 
-            case SemanticTag: {
-                value = Tagged(count, Value::decoded(input, last));
-                break;
-            }
+        case SemanticTag: {
+            value = Tagged(count, Value::decoded(input, last));
+            break;
+        }
 
-            case SpecialFloat: {
-                switch (count) {
-                    case 20:
-                        value = false;
-                        break;
-                    case 21:
-                        value = true;
-                        break;
-                    case 22:
-                        value = Null{};
-                        break;
-                    case 23:
-                        value = Undefined{};
-                        break;
-                        // TODO: floats
-                    case 31:
-                        value = Break{};
-                        break;
-                    default:
-                        throw Error("Illegal Special count number");
-                }
+        case SpecialFloat: {
+            switch (count) {
+            case 20:
+                value = false;
                 break;
-            }
-
+            case 21:
+                value = true;
+                break;
+            case 22:
+                value = Null{};
+                break;
+            case 23:
+                value = Undefined{};
+                break;
+                // TODO: floats
+            case 31:
+                value = Break{};
+                break;
             default:
-                // Not implemented yet
-                std::terminate();
+                throw Error("Illegal Special count number");
+            }
+            break;
+        }
+
+        default:
+            // Not implemented yet
+            std::terminate();
         }
     }
 
     template <std::input_iterator I, std::sentinel_for<I> S>
-        requires std::same_as<std::iter_value_t<I>, std::byte>
+    requires std::same_as<std::iter_value_t<I>, std::byte>
     static inline Value decoded(I &input, S last) {
         Value output;
         output.decode(input, last);
@@ -149,7 +209,7 @@ class Value {
     }
 
     template <std::ranges::input_range I>
-        requires std::same_as<std::ranges::range_value_t<I>, std::byte>
+    requires std::same_as<std::ranges::range_value_t<I>, std::byte>
     static inline Value decoded(I &&input) {
         Value output;
         auto begin = std::ranges::begin(input);
@@ -218,21 +278,25 @@ void encode(O &output, const I &value) {
 
 /** Comparing unique pointers of values should actually compare the contents.
  */
-    std::partial_ordering operator<=>(const std::unique_ptr<Value> &first, const std::unique_ptr<Value> &second) noexcept {
-        if (first && second) {
-            return (*first) <=> (*second);
-        } else {
-            return first.get() <=> second.get();
-        }
+std::partial_ordering operator<=>(
+  const std::unique_ptr<Value> &first,
+  const std::unique_ptr<Value> &second) noexcept {
+    if (first && second) {
+        return (*first) <=> (*second);
+    } else {
+        return first.get() <=> second.get();
     }
+}
 
 /** Comparing unique pointers of values should actually compare the contents.
  */
-    bool operator==(const std::unique_ptr<Value> &first, const std::unique_ptr<Value> &second) noexcept {
-        if (first && second) {
-            return (*first) == (*second);
-        } else {
-            return first.get() == second.get();
-        }
+bool operator==(
+  const std::unique_ptr<Value> &first,
+  const std::unique_ptr<Value> &second) noexcept {
+    if (first && second) {
+        return (*first) == (*second);
+    } else {
+        return first.get() == second.get();
     }
+}
 } // namespace conbor

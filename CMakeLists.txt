@@ -11,7 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(
     conbor
-    conbor/value.cxx
+    INTERFACE
     )
 
 include(FetchContent)
@@ -28,14 +28,6 @@ set_property(TARGET conbor PROPERTY POSITION_INDEPENDENT_CODE TRUE)
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
-
-find_package(SQLite3 REQUIRED)
-find_package(Threads REQUIRED)
-
-target_compile_options(conbor PRIVATE -Wall -Wextra -Werror)
-target_compile_definitions(conbor PRIVATE -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_XOPEN_SOURCE_EXTENDED=1 -D_ALL_SOURCE)
-
-target_link_libraries(conbor PUBLIC SQLite::SQLite3 Threads::Threads)
 
 install(FILES
     conbor/value.hxx
