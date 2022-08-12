@@ -124,11 +124,12 @@ template <
   std::sentinel_for<I> S>
 
   requires std::same_as<std::iter_value_t<I>, std::byte>
-inline std::byte peek(I &input, S last) {
+inline I peek(I input, S last, std::byte &output) {
     if (input == last) {
         throw EndOfInput("Reached end of input early");
     }
-    return *input;
+    output = *input;
+    return input;
 }
 
 /** Read a single byte, returning an error if input == last.
@@ -137,10 +138,10 @@ template <
   std::input_iterator I,
   std::sentinel_for<I> S>
   requires std::same_as<std::iter_value_t<I>, std::byte>
-inline std::byte read(I &input, S last) {
-    const auto output = peek(input, last);
+inline I read(I input, S last, std::byte &output) {
+    input = peek(input, last, output);
     ++input;
-    return output;
+    return input;
 }
 
 /** The major type read from the header.
@@ -180,25 +181,37 @@ inline std::uint64_t extract(const Count count) {
 
 using Header = std::tuple<MajorType, Count>;
 
+// TODO: fix this.  It should be possible to extract just the major type and
+// minor count.  We need to be able to decide what to do with a type without
+// advancing the iterator or throw an exception for possible other decision
+// making, if the user wants to do it that way.
+
+/** Peek at the header without advancing the iterator.
+ */
 template <
   std::input_iterator I,
   std::sentinel_for<I> S>
-  requires std::same_as<std::iter_value_t<I>, std::byte> Header read_header(I &input, S last) noexcept {
+  requires std::same_as<std::iter_value_t<I>, std::byte>
+I peek_header(I input, S last, Header &header) noexcept {
 
-    const auto byte = read(input, last);
+    std::byte byte;
+    input = peek(input, last, byte);
     const auto type = static_cast<MajorType>(byte >> 5);
     const auto tinycount = static_cast<std::uint8_t>(byte & std::byte(0b00011111));
 
     switch (tinycount) {
-    case 24:
-        return Header{type, Count(std::in_place_index<1>, static_cast<uint8_t>(read(input, last)))};
+    case 24: {
+        header = Header{type, Count(std::in_place_index<1>, static_cast<uint8_t>(read(input, last)))};
+        break;
+    }
 
     case 25: {
         uint16_t count = 0;
         for (size_t i = 0; i < sizeof(count); ++i) {
             count = (count << 8) | static_cast<decltype(count)>(read(input, last));
         }
-        return Header{type, Count(std::in_place_index<2>, count)};
+        header = Header{type, Count(std::in_place_index<2>, count)};
+        break;
     }
 
     case 26: {
@@ -206,7 +219,8 @@ template <
         for (size_t i = 0; i < sizeof(count); ++i) {
             count = (count << 8) | static_cast<decltype(count)>(read(input, last));
         }
-        return Header{type, Count(std::in_place_index<3>, count)};
+        header = Header{type, Count(std::in_place_index<3>, count)};
+        break;
     }
 
     case 27: {
@@ -214,12 +228,26 @@ template <
         for (size_t i = 0; i < sizeof(count); ++i) {
             count = (count << 8) | static_cast<decltype(count)>(read(input, last));
         }
-        return Header{type, Count(std::in_place_index<4>, count)};
+        header = Header{type, Count(std::in_place_index<4>, count)};
+        break;
     }
 
-    default:
-        return Header{type, Count(std::in_place_index<0>, tinycount)};
+    default: {
+        header = Header{type, Count(std::in_place_index<0>, tinycount)};
+        break;
     }
+    }
+    return input;
+}
+
+template <
+  std::input_iterator I,
+  std::sentinel_for<I> S>
+  requires std::same_as<std::iter_value_t<I>, std::byte>
+  I read_header(I input, S last, Header &header) noexcept {
+      input = peek_header(input, last, header);
+      ++input;
+      return input;
 }
 
 /** Write the header.
