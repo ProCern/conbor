@@ -31,25 +31,21 @@ namespace conbor {
 
 /** A type that can be encoded to cbor.
  */
-template <typename T, typename O>
-concept ToCborInternal = requires(const T &t, O o, Adl adl) {
-    requires std::output_iterator<O, std::byte>;
-
-    { to_cbor(o, t, adl) } -> std::same_as<O>;
+template <typename T>
+concept ToCborInternal = requires(const T &t, std::back_insert_iterator<std::vector<std::byte>> o, Adl adl) {
+    to_cbor(o, t, adl);
 };
 
 /** A type that can be encoded to cbor.
  */
-template <typename T, typename O>
-concept ToCborExternal = requires(const T &t, O o) {
-    requires std::output_iterator<O, std::byte>;
-
-    { to_cbor(o, t) } -> std::same_as<O>;
+template <typename T>
+concept ToCborExternal = requires(const T &t, std::back_insert_iterator<std::vector<std::byte>> o) {
+    to_cbor(o, t);
 };
 
-template <typename T, typename O>
-concept ToCbor = requires(const T &t, O o) {
-    requires ToCborExternal<T, O> || ToCborInternal<T, O>;
+template <typename T>
+concept ToCbor = requires(const T &t) {
+    requires ToCborExternal<T> || ToCborInternal<T>;
 };
 
 
@@ -60,20 +56,20 @@ concept Pair = std::tuple_size<T>::value == 2;
 
 /** Constrains an array range
  */
-template <typename T, typename O>
+template <typename T>
 concept ToCborRange = requires {
     requires std::ranges::input_range<T>;
-    requires ToCbor<std::ranges::range_value_t<T>, O>;
+    requires ToCbor<std::ranges::range_value_t<T>>;
 };
 
 /** Constrains a mapping range.
  */
-template <typename T, typename O>
+template <typename T>
 concept ToCborPairRange = requires {
     requires std::ranges::input_range<T>;
     requires Pair<std::ranges::range_value_t<T>>;
-    requires ToCbor<typename std::tuple_element<0, std::ranges::range_value_t<T>>::type, O>;
-    requires ToCbor<typename std::tuple_element<1, std::ranges::range_value_t<T>>::type, O>;
+    requires ToCbor<typename std::tuple_element<0, std::ranges::range_value_t<T>>::type>;
+    requires ToCbor<typename std::tuple_element<1, std::ranges::range_value_t<T>>::type>;
 };
 
 
@@ -443,7 +439,7 @@ O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl a
 
 /** Encode an array.
  */
-template <std::output_iterator<std::byte> O, ToCborRange<O> R>
+template <std::output_iterator<std::byte> O, ToCborRange R>
 O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     if constexpr (std::ranges::sized_range<R>) {
         output = write_header(output, MajorType::Array, static_cast<std::uint64_t>(value.size()));
@@ -451,7 +447,7 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
         output = write_header(output, Header{MajorType::Array, Count(std::in_place_index<0>, 31)});
     }
     for (const auto &item : value) {
-        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(item)>>, O>) {
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(item)>>>) {
             output = to_cbor(output, item, adl);
         } else {
             output = to_cbor(output, item);
@@ -465,7 +461,7 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
 
 /** Encode a sized map.
  */
-template <std::output_iterator<std::byte> O, ToCborPairRange<O> R>
+template <std::output_iterator<std::byte> O, ToCborPairRange R>
 O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     if constexpr (std::ranges::sized_range<R>) {
         output = write_header(output, MajorType::Map, static_cast<std::uint64_t>(value.size()));
@@ -473,12 +469,12 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
         output = write_header(output, Header{MajorType::Map, Count(std::in_place_index<0>, 31)});
     }
     for (const auto &[k, v] : value) {
-        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(k)>>, O>) {
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(k)>>>) {
             output = to_cbor(output, k, adl);
         } else {
             output = to_cbor(output, k);
         }
-        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(v)>>, O>) {
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(v)>>>) {
             output = to_cbor(output, v, adl);
         } else {
             output = to_cbor(output, v);
@@ -494,7 +490,7 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
 
 /** Encode an internal cbor value and automatically invoke ADL
  */
-template <std::output_iterator<std::byte> O, ToCborInternal<O> T>
+template <std::output_iterator<std::byte> O, ToCborInternal T>
 O to_cbor(O output, const T &value) {
     return to_cbor(output, value, Adl{});
 }
@@ -502,9 +498,7 @@ O to_cbor(O output, const T &value) {
 
 /** Special to_cbor convenience function that just encodes to and outputs a vector of bytes.
  */
-template <class T>
-requires ToCbor<T, std::back_insert_iterator<std::vector<std::byte>>>
-std::vector<std::byte> to_cbor(const T &value) {
+std::vector<std::byte> to_cbor(const ToCbor auto &value) {
     std::vector<std::byte> output;
     to_cbor(std::back_inserter(output), value);
     return output;

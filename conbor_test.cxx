@@ -265,8 +265,7 @@ TEST(Encoding, MapArrayMixedRecursive) {
 }
 
 namespace foo {
-    //template <conbor::ToCbor T>
-    template <typename T>
+    template <conbor::ToCbor T>
     struct CborFollowsTag {
         static constexpr uint16_t id = 55799;
         T contained;
@@ -275,24 +274,37 @@ namespace foo {
         }
     };
 
-    template <typename T>
+    template <conbor::ToCbor T>
     struct LeetTag {
         static constexpr uint16_t id = 1337;
         T contained;
+
+        LeetTag(T contained) : contained(std::move(contained)) {
+        }
     };
 
-    template <std::output_iterator<std::byte> O, conbor::ToCbor<O> T>
+    template <std::output_iterator<std::byte> O, conbor::ToCbor T>
     O to_cbor(O output, const CborFollowsTag<T> &tag) {
         output = write_header(output, conbor::MajorType::SemanticTag, tag.id);
 
-        return conbor::to_cbor(output, tag.contained);
+        using conbor::to_cbor;
+
+        return to_cbor(output, tag.contained);
     }
 
+    template <std::output_iterator<std::byte> O, conbor::ToCbor T>
+    O to_cbor(O output, const LeetTag<T> &tag) {
+        output = write_header(output, conbor::MajorType::SemanticTag, tag.id);
+
+        using conbor::to_cbor;
+
+        return to_cbor(output, tag.contained);
+    }
 }
 
-TEST(Encoding, CustomType) {
+TEST(Encoding, CustomTypes) {
     EXPECT_EQ(
-      conbor::to_cbor(foo::CborFollowsTag(std::vector<std::map<std::vector<std::u8string>, std::vector<std::u8string>>>{
+      conbor::to_cbor(std::vector{foo::CborFollowsTag(foo::LeetTag(foo::CborFollowsTag(std::vector<std::map<std::vector<std::u8string>, std::vector<std::u8string>>>{
           // Vector Item as a map
           {
               // map item
@@ -303,9 +315,15 @@ TEST(Encoding, CustomType) {
                   {u8"foo", u8"bar"},
               }
           }
-          })),
+          })))}),
 
       (std::vector<std::byte>{
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
+       // Simple CBOR data follows prefix
+        std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
+       // Leet tag prefix
+        std::byte(0xd9), std::byte(0x05), std::byte(0x39),
        // Simple CBOR data follows prefix
         std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
         // Array Header
