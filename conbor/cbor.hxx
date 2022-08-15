@@ -24,7 +24,7 @@
 #include <vector>
 
 namespace conbor {
-    /** Struct to force ACL for internal types.
+    /** Struct to force ADL for internal types.
      */
     struct Adl {
     };
@@ -72,6 +72,45 @@ concept ToCborPairRange = requires {
     requires ToCbor<typename std::tuple_element<1, std::ranges::range_value_t<T>>::type>;
 };
 
+template <typename T>
+concept InputView = std::ranges::input_range<T> && std::ranges::view<T>;
+
+/** A type that can be decoded from cbor.
+ */
+template <typename T>
+concept FromCborInternal = requires(T &t, std::ranges::subrange<std::istreambuf_iterator<std::byte>> i, Adl adl) {
+    {from_cbor(i, t, adl)} -> InputView;
+};
+
+/** A type that can be encoded to cbor.
+ */
+template <typename T>
+concept FromCborExternal = requires(T &t, std::ranges::subrange<std::istreambuf_iterator<std::byte>> i) {
+    { from_cbor(i, t)} -> InputView;
+};
+
+template <typename T>
+concept FromCbor = requires(const T &t) {
+    requires FromCborExternal<T> || FromCborInternal<T>;
+};
+
+/** Constrains an array range
+ */
+template <typename T>
+concept FromCborRange = requires {
+    requires std::ranges::input_range<T>;
+    requires FromCbor<std::ranges::range_value_t<T>>;
+};
+
+/** Constrains a mapping range.
+ */
+template <typename T>
+concept FromCborPairRange = requires {
+    requires std::ranges::input_range<T>;
+    requires Pair<std::ranges::range_value_t<T>>;
+    requires FromCbor<typename std::tuple_element<0, std::ranges::range_value_t<T>>::type>;
+    requires FromCbor<typename std::tuple_element<1, std::ranges::range_value_t<T>>::type>;
+};
 
 /** Default error type.
  */
@@ -177,11 +216,7 @@ inline std::uint64_t extract(const Count count) {
 
 using Header = std::tuple<MajorType, Count>;
 
-// TODO: fix this.  It should be possible to extract just the major type and
-// minor count.  We need to be able to decide what to do with a type without
-// advancing the iterator or throw an exception for possible other decision
-// making, if the user wants to do it that way.
-
+// TODO: input view
 /** Peek at the header without advancing the iterator.
  */
 template <
@@ -236,6 +271,7 @@ I peek_header(I input, S last, Header &header) noexcept {
     return input;
 }
 
+// TODO: input view
 template <
   std::input_iterator I,
   std::sentinel_for<I> S>
@@ -378,6 +414,19 @@ requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_
         return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
     }
 }
+
+// Signed integer
+//template <InputView I, std::signed_integral Integer>
+//requires (!std::same_as<Integer, bool>) && (!std::same_as<Integer, std::byte>)&&(!std::same_as<Integer, char>)&&(!std::same_as<Integer, char8_t>)
+    //std::ranges::subrange<typename decltype(std::ranges::begin(I)), typename decltype(std::ranges::end(I))> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
+        //Header header;
+        //auto iter = read_header(
+    //if (value < 0) {
+        //return write_header(output, MajorType::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
+    //} else {
+        //return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
+    //}
+//}
 
 // Unsigned integer
 template <std::output_iterator<std::byte> O, std::unsigned_integral I>

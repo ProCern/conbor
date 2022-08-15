@@ -304,59 +304,60 @@ namespace foo {
 
 TEST(Encoding, CustomTypes) {
     EXPECT_EQ(
-      conbor::to_cbor(std::vector{foo::CborFollowsTag(foo::LeetTag(foo::CborFollowsTag(std::vector<std::map<std::vector<std::u8string>, std::vector<std::u8string>>>{
-          // Vector Item as a map
-          {
-              // map item
-              {
-                  // key is a vector
-                  {u8"1337", u8"6969"},
-                  // value is a vector
-                  {u8"foo", u8"bar"},
-              }
-          }
-          })))}),
+      conbor::to_cbor(foo::CborFollowsTag(std::vector{foo::LeetTag(std::map<std::u8string, foo::CborFollowsTag<std::vector<std::u8string>>>{{u8"foo", foo::CborFollowsTag(std::vector<std::u8string>{u8"bar"})}})})),
 
       (std::vector<std::byte>{
-        // Array Header
-        std::byte(4 << 5) | std::byte(1),
        // Simple CBOR data follows prefix
         std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
        // Leet tag prefix
         std::byte(0xd9), std::byte(0x05), std::byte(0x39),
-       // Simple CBOR data follows prefix
-        std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
-        // Array Header
-        std::byte(4 << 5) | std::byte(1),
         // Map Header
         std::byte(5 << 5) | std::byte(1),
-        // Array Header
-        std::byte(4 << 5) | std::byte(2),
-        // String
-        std::byte(3 << 5) | std::byte(4),
-        std::byte('1'),
-        std::byte('3'),
-        std::byte('3'),
-        std::byte('7'),
-        // String
-        std::byte(3 << 5) | std::byte(4),
-        std::byte('6'),
-        std::byte('9'),
-        std::byte('6'),
-        std::byte('9'),
-        // Array Header
-        std::byte(4 << 5) | std::byte(2),
         // String
         std::byte(3 << 5) | std::byte(3),
         std::byte('f'),
         std::byte('o'),
         std::byte('o'),
+       // Simple CBOR data follows prefix
+        std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
         // String
         std::byte(3 << 5) | std::byte(3),
         std::byte('b'),
         std::byte('a'),
         std::byte('r'),
-      }));
+      })) << "Bidirectional decoding of internal and external types to be sure ADL does everything it should";
+}
+
+TEST(Decoding, PositiveInteger) {
+    //EXPECT_EQ(5, conbor::from_cbor<int>(std::vector<std::byte>{std::byte(5)})) << "tiny positive int";
+    /*EXPECT_EQ(conbor::to_cbor(24), (std::vector<std::byte>{std::byte(24), std::byte(24)}))
+      << "1 byte positive int";
+    EXPECT_EQ(
+      conbor::to_cbor(256),
+      (std::vector<std::byte>{std::byte(25), std::byte(1), std::byte(0)}))
+      << "2 byte positive int";
+    EXPECT_EQ(
+      conbor::to_cbor(65536),
+      (std::vector<
+        std::byte>{std::byte(26), std::byte(0), std::byte(1), std::byte(0), std::byte(0)}))
+      << "4 byte positive int";
+    EXPECT_EQ(
+      conbor::to_cbor(4294967296),
+      (std::vector<std::byte>{
+        std::byte(27),
+        std::byte(0),
+        std::byte(0),
+        std::byte(0),
+        std::byte(1),
+        std::byte(0),
+        std::byte(0),
+        std::byte(0),
+        std::byte(0)}))
+      << "8 byte positive int";*/
 }
 
 /*TEST(BuildValue, Equality) {
