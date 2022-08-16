@@ -287,6 +287,39 @@ template <InputRange I>
     return {type, tinycount};
 }
 
+template <typename T>
+inline std::array<std::byte, sizeof(T)> to_be_bytes(const T &value) {
+    std::array<std::byte, sizeof(T)> output;
+    const auto v_pointer = reinterpret_cast<const std::byte *>(&value);
+
+
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        if constexpr (std::endian::native == std::endian::big) {
+            output[i] = v_pointer[i];
+        } else {
+            output[i] = v_pointer[sizeof(value) - 1 - i];
+        }
+    }
+
+    return output;
+}
+
+template <typename T>
+inline T from_be_bytes(std::span<const std::byte> input) {
+    T value;
+    const auto v_pointer = reinterpret_cast<std::byte *>(&value);
+
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        if constexpr (std::endian::native == std::endian::big) {
+            v_pointer[i] = input[i];
+        } else {
+            v_pointer[i] = input[sizeof(value) - 1 - i];
+        }
+    }
+
+    return value;
+}
+
 template <InputRange I>
   Subrange<I> read_header(I input, Header &header) noexcept {
     std::byte byte{};
@@ -302,32 +335,32 @@ template <InputRange I>
     }
 
     case 25: {
-        uint16_t count = 0;
+        std::array<std::byte, 2> count;
         for (size_t i = 0; i < sizeof(count); ++i) {
             subrange = read(std::move(subrange), byte);
-            count = (count << 8) | static_cast<decltype(count)>(byte);
+            count[i] = byte;
         }
-        header = Header{type, Count(std::in_place_index<2>, count)};
+        header = Header{type, Count(std::in_place_index<2>, from_be_bytes<uint16_t>(count))};
         break;
     }
 
     case 26: {
-        uint32_t count = 0;
+        std::array<std::byte, 4> count;
         for (size_t i = 0; i < sizeof(count); ++i) {
             subrange = read(std::move(subrange), byte);
-            count = (count << 8) | static_cast<decltype(count)>(byte);
+            count[i] = byte;
         }
-        header = Header{type, Count(std::in_place_index<3>, count)};
+        header = Header{type, Count(std::in_place_index<3>, from_be_bytes<uint32_t>(count))};
         break;
     }
 
     case 27: {
-        uint64_t count = 0;
+        std::array<std::byte, 8> count;
         for (size_t i = 0; i < sizeof(count); ++i) {
             subrange = read(std::move(subrange), byte);
-            count = (count << 8) | static_cast<decltype(count)>(byte);
+            count[i] = byte;
         }
-        header = Header{type, Count(std::in_place_index<4>, count)};
+        header = Header{type, Count(std::in_place_index<4>, from_be_bytes<uint64_t>(count))};
         break;
     }
 
@@ -347,53 +380,16 @@ O write_header(O output, const Header header) {
 
     const auto type_byte = std::byte(static_cast<std::uint8_t>(type) << 5);
 
-    switch (count.index()) {
-    case 0: {
+    if (count.index() == 0) {
         *output = (type_byte | std::byte(std::get<0>(count)));
         ++output;
-        break;
-    }
-    case 1: {
-        *output = (type_byte | std::byte(24));
+    } else {
+        *output = (type_byte | std::byte(23 + count.index()));
         ++output;
-        *output = std::byte(std::get<1>(count));
-        ++output;
-        break;
-    }
-    case 2: {
-        *output = (type_byte | std::byte(25));
-        ++output;
-        const auto inner_count = std::get<2>(count);
-        for (size_t i = 0; i < sizeof(inner_count); ++i) {
-            *output = std::byte(inner_count >> ((sizeof(inner_count) - 1 - i) * 8));
-            ++output;
-        }
-        break;
-    }
-    case 3: {
-        *output = (type_byte | std::byte(26));
-        ++output;
-        const auto inner_count = std::get<3>(count);
-        for (size_t i = 0; i < sizeof(inner_count); ++i) {
-            *output = std::byte(inner_count >> ((sizeof(inner_count) - 1 - i) * 8));
-            ++output;
-        }
-        break;
-    }
-    case 4: {
-        *output = (type_byte | std::byte(27));
-        ++output;
-        const auto inner_count = std::get<4>(count);
-        for (size_t i = 0; i < sizeof(inner_count); ++i) {
-            *output = std::byte(inner_count >> ((sizeof(inner_count) - 1 - i) * 8));
-            ++output;
-        }
-        break;
-    }
 
-    default:
-        // __builtin_unreachable() or std::unreachable()
-        std::terminate();
+        std::visit([&](const auto &count) {
+            output = std::ranges::copy(to_be_bytes(count), output).out;
+        }, count);
     }
 
     return output;
@@ -614,6 +610,68 @@ Subrange<I> from_cbor(I input, [[maybe_unused]] std::nullptr_t &value, [[maybe_u
     return subrange;
 }
 
+/** Convert from float to float16 only if it can be done losslessly.
+ */
+inline std::optional<std::array<std::byte, 2>> lossless_float16(const float value) {
+    const auto bytes = to_be_bytes(value);
+    const bool sign = (bytes[0] & std::byte(0b10000000)) != std::byte(0);
+    const std::uint8_t exponent =
+        static_cast<std::uint8_t>(((bytes[0] & std::byte(0b01111111)) << 1)
+        | ((bytes[1] & std::byte(0b10000000)) >> 7));
+
+    const std::int8_t normalized_exponent =
+        static_cast<std::int16_t>(exponent) - 127;
+
+    const std::uint32_t fraction = 
+        (static_cast<std::uint32_t>(bytes[1] & std::byte(0b01111111)) << 16)
+        | (static_cast<std::uint32_t>(bytes[2] & std::byte(0b01111111)) << 8)
+        | static_cast<std::uint32_t>(bytes[3] & std::byte(0b01111111));
+    // if zero
+    if (exponent == 0 && fraction == 0) {
+        std::array<std::byte, 2> output = {std::byte(0), std::byte(0)};
+        if (sign) {
+            output[0] = std::byte(0b10000000);
+        }
+        return output;
+
+        // infinity or NaN
+    } else if (exponent == 0xFF) {
+        std::array<std::byte, 2> output = {std::byte(0b01111100), std::byte(0)};
+        if (sign) {
+            output[0] |= std::byte(0b10000000);
+        }
+        // signaling NaN
+        if (fraction & 0b10000000000000000000000) {
+            output[0] |= std::byte(0b00000010);
+            // non-signaling NaN
+        } else if (fraction) {
+            output[1] = std::byte(0b00000001);
+        }
+
+        return output;
+        // Small-precision normal numbers
+    } else if (normalized_exponent >= -14 && normalized_exponent <= 15 && ((fraction & 0b00000000001111111111111) == 0)) {
+        // float16 5-bit biased exponent.
+        const std::uint8_t biased_exponent = normalized_exponent + 15;
+
+        std::array<std::byte, 2> output;
+        if (sign) {
+            output[0] = std::byte(0b10000000);
+        } else {
+            output[0] = std::byte(0);
+        }
+        output[0] |= std::byte(biased_exponent << 2);
+        // Left two significant bits of 23-bit integer in fraction
+        output[0] |= std::byte(fraction >> 21);
+        // Bits 21 through 13 in fraction.  cut off last 13 bits, which remain
+        // unused.
+        output[1] |= std::byte(fraction >> 13);
+        return output;
+    } else {
+        return std::nullopt;
+    }
+}
+
 template <std::output_iterator<std::byte> O>
 O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl adl) {
     const double d = value;
@@ -625,30 +683,16 @@ O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl a
       std::endian::native == std::endian::big || std::endian::native == std::endian::little,
       "mixed endian architectures can not be supported yet");
 
-    // TODO: float16
+    // float16 or float32
     if (static_cast<double>(f) == d) {
-        const auto f_ptr = reinterpret_cast<const std::byte *>(&f);
-        std::uint32_t bytes{};
-        const auto bytes_input_ptr = reinterpret_cast<std::byte *>(&bytes);
-
-        // As long as ints and floats have the same byte order, this will always
-        // output bytes big-endian.
-        for (size_t i = 0; i < sizeof(f); ++i) {
-            bytes_input_ptr[i] = f_ptr[i];
+        const auto float16 = lossless_float16(f);
+        if (float16) {
+            return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<2>, from_be_bytes<std::uint16_t>(*float16))});
+        } else {
+            return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<3>, from_be_bytes<std::uint32_t>(to_be_bytes(f)))});
         }
-
-        return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<3>, bytes)});
     } else {
-        const auto d_ptr = reinterpret_cast<const std::byte *>(&d);
-        std::uint64_t bytes{};
-        const auto bytes_input_ptr = reinterpret_cast<std::byte *>(&bytes);
-        // As long as ints and floats have the same byte order, this will always
-        // output bytes big-endian.
-        for (size_t i = 0; i < sizeof(d); ++i) {
-            bytes_input_ptr[i] = d_ptr[i];
-        }
-
-        return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<3>, bytes)});
+        return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<4>, from_be_bytes<std::uint64_t>(to_be_bytes(d)))});
     }
 }
 

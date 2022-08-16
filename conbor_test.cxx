@@ -29,6 +29,29 @@ TEST(Encoding, Specials) {
       << "optional set";
 }
 
+TEST(Encoding, Floats) {
+    EXPECT_EQ(
+            conbor::to_cbor(0.15625f),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b00110001), std::byte(0b00000000)}))
+      << "16 bit float";
+    EXPECT_EQ(
+            conbor::to_cbor(0.15625),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b00110001), std::byte(0b00000000)}))
+      << "16 bit float from double";
+    EXPECT_EQ(
+            conbor::to_cbor(1.0f / 3.0f),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(26), std::byte(0b00111110), std::byte(0b10101010), std::byte(0b10101010), std::byte(0b10101011)}))
+      << "32 bit float";
+    EXPECT_EQ(
+            conbor::to_cbor(static_cast<double>(1.0f / 3.0f)),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(26), std::byte(0b00111110), std::byte(0b10101010), std::byte(0b10101010), std::byte(0b10101011)}))
+      << "32 bit float from double";
+    EXPECT_EQ(
+            conbor::to_cbor(1.0 / 3.0),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(27), std::byte(0b00111111), std::byte(0b11010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101)}))
+      << "64 bit float";
+}
+
 TEST(Encoding, PositiveInteger) {
     EXPECT_EQ(conbor::to_cbor(5), std::vector<std::byte>{std::byte(5)})
       << "tiny positive int";
