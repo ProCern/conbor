@@ -823,9 +823,9 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 for (size_t i = 0; i < *count; ++i) {
                     OutputType item;
                     if constexpr (FromCborInternal<OutputType>) {
-                        subrange = from_cbor(subrange, item, adl);
+                        subrange = Subrange<I>(from_cbor(subrange, item, adl));
                     } else {
-                        subrange = from_cbor(subrange, item);
+                        subrange = Subrange<I>(from_cbor(subrange, item));
                     }
 
                     push_into(value, std::move(item));
@@ -836,9 +836,9 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                     OutputType item;
 
                     if constexpr (FromCborInternal<OutputType>) {
-                        subrange = from_cbor(subrange, item, adl);
+                        subrange = Subrange<I>(from_cbor(subrange, item, adl));
                     } else {
-                        subrange = from_cbor(subrange, item);
+                        subrange = Subrange<I>(from_cbor(subrange, item));
                     }
 
                     push_into(value, std::move(item));
@@ -902,16 +902,16 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 for (size_t i = 0; i < *count; ++i) {
                     KeyType output_key;
                     if constexpr (FromCborInternal<KeyType>) {
-                        subrange = from_cbor(subrange, output_key, adl);
+                        subrange = Subrange<I>(from_cbor(subrange, output_key, adl));
                     } else {
-                        subrange = from_cbor(subrange, output_key);
+                        subrange = Subrange<I>(from_cbor(subrange, output_key));
                     }
 
-                    KeyType output_value;
+                    ValueType output_value;
                     if constexpr (FromCborInternal<ValueType>) {
-                        subrange = from_cbor(subrange, output_value, adl);
+                        subrange = Subrange<I>(from_cbor(subrange, output_value, adl));
                     } else {
-                        subrange = from_cbor(subrange, output_value);
+                        subrange = Subrange<I>(from_cbor(subrange, output_value));
                     }
 
                     push_into(value, OutputType{std::move(output_key), std::move(output_value)});
@@ -921,16 +921,16 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 while (peek_header(input) != std::tuple<MajorType, uint8_t>(MajorType::SpecialFloat, 31)) {
                     KeyType output_key;
                     if constexpr (FromCborInternal<KeyType>) {
-                        subrange = from_cbor(subrange, output_key, adl);
+                        subrange = Subrange<I>(from_cbor(subrange, output_key, adl));
                     } else {
-                        subrange = from_cbor(subrange, output_key);
+                        subrange = Subrange<I>(from_cbor(subrange, output_key));
                     }
 
-                    KeyType output_value;
+                    ValueType output_value;
                     if constexpr (FromCborInternal<ValueType>) {
-                        subrange = from_cbor(subrange, output_value, adl);
+                        subrange = Subrange<I>(from_cbor(subrange, output_value, adl));
                     } else {
-                        subrange = from_cbor(subrange, output_value);
+                        subrange = Subrange<I>(from_cbor(subrange, output_value));
                     }
 
                     push_into(value, OutputType{std::move(output_key), std::move(output_value)});
@@ -976,9 +976,9 @@ Subrange<I> from_cbor(I input, std::optional<O> &value, [[maybe_unused]] Adl adl
     } else {
         value.emplace();
         if constexpr (FromCborInternal<O>) {
-            return from_cbor(std::move(input), *value, adl);
+            return Subrange<I>(from_cbor(std::move(input), *value, adl));
         } else {
-            return from_cbor(std::move(input), *value);
+            return Subrange<I>(from_cbor(std::move(input), *value));
         }
     }
 }
@@ -1003,7 +1003,7 @@ std::vector<std::byte> to_cbor(const ToCbor auto &value) {
  */
 template <InputRange I, FromCborInternal O>
 Subrange<I> from_cbor(I input, O &value) {
-    return from_cbor(std::move(input), value, Adl{});
+    return Subrange<I>(from_cbor(std::move(input), value, Adl{}));
 }
 
 template <FromCbor O, InputRange I>

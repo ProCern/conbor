@@ -179,6 +179,37 @@ TEST(Encoding, String) {
         std::byte('7')}));
 }
 
+TEST(Decoding, ByteString) {
+    EXPECT_EQ(
+      (std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)}),
+      (conbor::from_cbor<std::vector<std::byte>>(std::vector<std::byte>{
+        std::byte(2 << 5) | std::byte(4),
+        std::byte(1),
+        std::byte(3),
+        std::byte(3),
+        std::byte(7)})));
+}
+
+TEST(Decoding, String) {
+    EXPECT_EQ(
+      (std::u8string(u8"1337")),
+      (conbor::from_cbor<std::u8string>(std::vector<std::byte>{
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7')})));
+
+    EXPECT_EQ(
+      (std::string("1337")),
+      (conbor::from_cbor<std::string>(std::vector<std::byte>{
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7')})));
+}
+
 TEST(Encoding, Array) {
     EXPECT_EQ(
       conbor::to_cbor(std::vector<std::u8string>{
@@ -343,22 +374,32 @@ TEST(Encoding, MapArrayMixedRecursive) {
 }
 
 namespace foo {
-    template <conbor::ToCbor T>
+    template <typename T>
+    requires conbor::ToCbor<T> && conbor::FromCbor<T> && std::default_initializable<T>
     struct CborFollowsTag {
         static constexpr uint16_t id = 55799;
         T contained;
 
+        CborFollowsTag() = default;
+
         CborFollowsTag(T contained) : contained(std::move(contained)) {
         }
+
+        auto operator<=>(const CborFollowsTag<T> &other) const noexcept = default;
     };
 
-    template <conbor::ToCbor T>
+    template <typename T>
+    requires conbor::ToCbor<T> && conbor::FromCbor<T> && std::default_initializable<T>
     struct LeetTag {
         static constexpr uint16_t id = 1337;
         T contained;
 
+        LeetTag() = default;
+
         LeetTag(T contained) : contained(std::move(contained)) {
         }
+
+        auto operator<=>(const LeetTag<T> &other) const noexcept = default;
     };
 
     template <std::output_iterator<std::byte> O, conbor::ToCbor T>
@@ -377,6 +418,30 @@ namespace foo {
         using conbor::to_cbor;
 
         return to_cbor(output, tag.contained);
+    }
+
+    template <conbor::InputRange I, conbor::FromCbor T>
+    conbor::Subrange<I> from_cbor(I input, CborFollowsTag<T> &tag) {
+        conbor::Header header;
+        auto subrange = conbor::read_header(std::move(input), header);
+        if (!(header.type == conbor::MajorType::SemanticTag && conbor::extract(header.count).value() == tag.id)) {
+            throw conbor::InvalidType("Expected CborFollows");
+        }
+        using conbor::from_cbor;
+
+        return from_cbor(subrange, tag.contained);
+    }
+
+    template <conbor::InputRange I, conbor::FromCbor T>
+    conbor::Subrange<I> from_cbor(I input, LeetTag<T> &tag) {
+        conbor::Header header;
+        auto subrange = conbor::read_header(std::move(input), header);
+        if (!(header.type == conbor::MajorType::SemanticTag && conbor::extract(header.count).value() == tag.id)) {
+            throw conbor::InvalidType("Expected Leet");
+        }
+        using conbor::from_cbor;
+
+        return from_cbor(subrange, tag.contained);
     }
 }
 
@@ -614,6 +679,85 @@ TEST(Decoding, Map) {
         std::byte('a'),
         std::byte('r'),
       })));
+}
+
+TEST(Decoding, MapArrayMixedRecursive) {
+    EXPECT_EQ(
+      (std::vector<std::map<std::vector<std::u8string>, std::vector<std::u8string>>>{
+          // Vector Item as a map
+          {
+              // map item
+              {
+                  // key is a vector
+                  {u8"1337", u8"6969"},
+                  // value is a vector
+                  {u8"foo", u8"bar"},
+              }
+          }
+          }),
+
+      (conbor::from_cbor<std::vector<std::map<std::vector<std::u8string>, std::vector<std::u8string>>>>(std::vector<std::byte>{
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
+        // Map Header
+        std::byte(5 << 5) | std::byte(1),
+        // Array Header
+        std::byte(4 << 5) | std::byte(2),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+        // Array Header
+        std::byte(4 << 5) | std::byte(2),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('f'),
+        std::byte('o'),
+        std::byte('o'),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('b'),
+        std::byte('a'),
+        std::byte('r'),
+      })));
+}
+
+TEST(Decoding, CustomTypes) {
+    EXPECT_EQ(
+      (foo::CborFollowsTag(std::vector{foo::LeetTag(std::map<std::u8string, foo::CborFollowsTag<std::vector<std::u8string>>>{{u8"foo", foo::CborFollowsTag(std::vector<std::u8string>{u8"bar"})}})})),
+
+      (conbor::from_cbor<foo::CborFollowsTag<std::vector<foo::LeetTag<std::map<std::u8string, foo::CborFollowsTag<std::vector<std::u8string>>>>>>>(std::vector<std::byte>{
+       // Simple CBOR data follows prefix
+        std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
+       // Leet tag prefix
+        std::byte(0xd9), std::byte(0x05), std::byte(0x39),
+        // Map Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('f'),
+        std::byte('o'),
+        std::byte('o'),
+       // Simple CBOR data follows prefix
+        std::byte(0xd9), std::byte(0xd9), std::byte(0xf7),
+        // Array Header
+        std::byte(4 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('b'),
+        std::byte('a'),
+        std::byte('r'),
+      }))) << "Bidirectional decoding of internal and external types to be sure ADL does everything it should";
 }
 
 /*TEST(BuildValue, Equality) {
