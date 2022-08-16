@@ -305,7 +305,7 @@ inline std::array<std::byte, sizeof(T)> to_be_bytes(const T &value) {
 }
 
 template <typename T>
-inline T from_be_bytes(std::span<const std::byte> input) {
+inline T from_be_bytes(std::array<std::byte, sizeof(T)> input) {
     T value;
     const auto v_pointer = reinterpret_cast<std::byte *>(&value);
 
@@ -613,44 +613,40 @@ Subrange<I> from_cbor(I input, [[maybe_unused]] std::nullptr_t &value, [[maybe_u
 /** Convert from float to float16 only if it can be done losslessly.
  */
 inline std::optional<std::array<std::byte, 2>> lossless_float16(const float value) {
+    switch (std::fpclassify(value)) {
+        case FP_ZERO: {
+            std::array<std::byte, 2> output = {std::byte(0), std::byte(0)};
+            if (std::signbit(value)) {
+                output[0] = std::byte(0b10000000);
+            }
+            return output;
+        }
+        case FP_INFINITE: {
+            std::array<std::byte, 2> output = {std::byte(0b01111100), std::byte(0)};
+            if (std::signbit(value)) {
+                // Positive or negative infinity
+                output[0] |= std::byte(0b10000000);
+            }
+
+            return output;
+        }
+        case FP_NAN: {
+            return std::array<std::byte, 2>{{std::byte(0b01111100), std::byte(1)}};
+        }
+    }
     const auto bytes = to_be_bytes(value);
     const bool sign = (bytes[0] & std::byte(0b10000000)) != std::byte(0);
     const std::uint8_t exponent =
         static_cast<std::uint8_t>(((bytes[0] & std::byte(0b01111111)) << 1)
-        | ((bytes[1] & std::byte(0b10000000)) >> 7));
+                | ((bytes[1] & std::byte(0b10000000)) >> 7));
 
-    const std::int8_t normalized_exponent =
-        static_cast<std::int16_t>(exponent) - 127;
-
+    const std::int8_t normalized_exponent = static_cast<std::int16_t>(exponent) - 127;
     const std::uint32_t fraction = 
         (static_cast<std::uint32_t>(bytes[1] & std::byte(0b01111111)) << 16)
-        | (static_cast<std::uint32_t>(bytes[2] & std::byte(0b01111111)) << 8)
-        | static_cast<std::uint32_t>(bytes[3] & std::byte(0b01111111));
-    // if zero
-    if (exponent == 0 && fraction == 0) {
-        std::array<std::byte, 2> output = {std::byte(0), std::byte(0)};
-        if (sign) {
-            output[0] = std::byte(0b10000000);
-        }
-        return output;
+        | (static_cast<std::uint32_t>(bytes[2]) << 8)
+        | static_cast<std::uint32_t>(bytes[3]);
 
-        // infinity or NaN
-    } else if (exponent == 0xFF) {
-        std::array<std::byte, 2> output = {std::byte(0b01111100), std::byte(0)};
-        if (sign) {
-            output[0] |= std::byte(0b10000000);
-        }
-        // signaling NaN
-        if (fraction & 0b10000000000000000000000) {
-            output[0] |= std::byte(0b00000010);
-            // non-signaling NaN
-        } else if (fraction) {
-            output[1] = std::byte(0b00000001);
-        }
-
-        return output;
-        // Small-precision normal numbers
-    } else if (normalized_exponent >= -14 && normalized_exponent <= 15 && ((fraction & 0b00000000001111111111111) == 0)) {
+    if (normalized_exponent >= -14 && normalized_exponent <= 15 && ((fraction & 0b00000000001111111111111) == 0)) {
         // float16 5-bit biased exponent.
         const std::uint8_t biased_exponent = normalized_exponent + 15;
 
@@ -665,10 +661,61 @@ inline std::optional<std::array<std::byte, 2>> lossless_float16(const float valu
         output[0] |= std::byte(fraction >> 21);
         // Bits 21 through 13 in fraction.  cut off last 13 bits, which remain
         // unused.
-        output[1] |= std::byte(fraction >> 13);
+        output[1] = std::byte(fraction >> 13);
         return output;
+    }
+
+    return std::nullopt;
+}
+
+inline float read_float16(std::array<std::byte, 2> input) {
+    const bool sign = (input[0] & std::byte(0b10000000)) != std::byte(0);
+    const std::uint8_t exponent = static_cast<std::uint8_t>((input[0] & std::byte(0b01111100)) >> 2);
+    const std::uint16_t fraction =
+        (static_cast<std::uint16_t>(input[0] & std::byte(0b00000011)) << 8)
+        | static_cast<std::uint16_t>(input[1]);
+    if (exponent == 0) {
+        // zero
+        if (fraction == 0) {
+            if (sign) {
+                return -0.0f;
+            } else {
+                return 0.0f;
+            }
+        } else {
+            // Subnormal.  There probably is a better way of doing this.
+            const auto adjusted_fraction = static_cast<float>(fraction) / static_cast<float>(1 << 10);
+            return (sign ? -1.0f : 1.0f) * adjusted_fraction * std::pow(2.0f, -14);
+        }
+    } else if (exponent == 0b11111) {
+        // infinity
+        if (fraction == 0) {
+            return (sign ? -1.0f : 1.0f) * std::numeric_limits<float>::infinity();
+        } else {
+            // NaN
+            return std::numeric_limits<float>::quiet_NaN();
+        }
     } else {
-        return std::nullopt;
+        const std::int8_t normalized_exponent = static_cast<std::int8_t>(exponent) - 15;
+        const auto biased_exponent = std::byte(static_cast<std::int16_t>(normalized_exponent) + 127);
+
+        std::array<std::byte, 4> bytes = {std::byte(0), std::byte(0), std::byte(0), std::byte(0)};
+
+        if (sign) {
+            bytes[0] = std::byte(0b10000000);
+        }
+        bytes[0] |= biased_exponent >> 1;
+
+        // Left bit is right bit from exponent.
+        bytes[1] = biased_exponent << 7;
+
+        // Most significant 7 bits from 10-bit fraction
+        bytes[1] |= std::byte(fraction >> 3);
+
+        // Least significant 3 bits of 10-bit fraction
+        bytes[2] = std::byte(fraction << 5);
+
+        return from_be_bytes<float>(bytes);
     }
 }
 
@@ -684,7 +731,7 @@ O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl a
       "mixed endian architectures can not be supported yet");
 
     // float16 or float32
-    if (static_cast<double>(f) == d) {
+    if (std::isnan(d) || static_cast<double>(f) == d) {
         const auto float16 = lossless_float16(f);
         if (float16) {
             return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<2>, from_be_bytes<std::uint16_t>(*float16))});
@@ -694,6 +741,45 @@ O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl a
     } else {
         return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<4>, from_be_bytes<std::uint64_t>(to_be_bytes(d)))});
     }
+}
+
+template <InputRange I>
+Subrange<I> from_cbor(I input, std::floating_point auto &value, [[maybe_unused]] Adl adl) {
+    static_assert(sizeof(float) == 4, "floats must be 4 bytes");
+    static_assert(sizeof(double) == 8, "doubles must be 8 bytes");
+    static_assert(
+      std::endian::native == std::endian::big || std::endian::native == std::endian::little,
+      "mixed endian architectures can not be supported yet");
+
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    if (header.type != MajorType::SpecialFloat) {
+        throw InvalidType("Tried to read a float, but didn't get one");
+    }
+
+    switch (header.count.index()) {
+        case 0:
+        case 1: {
+            throw InvalidType("Got a Special of the wrong type.");
+        }
+
+        case 2: {
+            value = read_float16(to_be_bytes(std::get<2>(header.count)));
+            break;
+        }
+
+        case 3: {
+            value = from_be_bytes<float>(to_be_bytes(std::get<3>(header.count)));
+            break;
+        }
+
+        case 4: {
+            value = from_be_bytes<double>(to_be_bytes(std::get<4>(header.count)));
+            break;
+        }
+    }
+
+    return subrange;
 }
 
 /** Encode an array.

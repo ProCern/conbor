@@ -4,6 +4,7 @@
 
 #include "conbor/cbor.hxx"
 #include <gtest/gtest.h>
+#include <limits>
 
 TEST(Encoding, Specials) {
     EXPECT_EQ(
@@ -50,6 +51,36 @@ TEST(Encoding, Floats) {
             conbor::to_cbor(1.0 / 3.0),
       (std::vector<std::byte>{std::byte(7 << 5) | std::byte(27), std::byte(0b00111111), std::byte(0b11010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101)}))
       << "64 bit float";
+
+    EXPECT_EQ(
+            conbor::to_cbor(0.0),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b00000000), std::byte(0b00000000)}))
+      << "16 bit zero";
+
+    EXPECT_EQ(
+            conbor::to_cbor(-0.0),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b10000000), std::byte(0b00000000)}))
+      << "16 bit negative zero";
+
+    EXPECT_EQ(
+            conbor::to_cbor(std::numeric_limits<double>::infinity()),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b01111100), std::byte(0b00000000)}))
+      << "16 bit inifinity";
+
+    EXPECT_EQ(
+            conbor::to_cbor(-std::numeric_limits<double>::infinity()),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b11111100), std::byte(0b00000000)}))
+      << "16 bit negative inifinity";
+
+    EXPECT_EQ(
+            conbor::to_cbor(std::numeric_limits<double>::quiet_NaN()),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b01111100), std::byte(0b00000001)}))
+      << "16 bit quiet nan";
+
+    EXPECT_EQ(
+            conbor::to_cbor(std::numeric_limits<double>::signaling_NaN()),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b01111100), std::byte(0b00000001)}))
+      << "16 bit signaling nan";
 }
 
 TEST(Encoding, PositiveInteger) {
@@ -401,6 +432,20 @@ TEST(Decoding, Specials) {
             std::optional<int>{5},
       conbor::from_cbor<std::optional<int>>(std::vector<std::byte>{std::byte(5)}))
       << "optional set";
+}
+
+TEST(Decoding, Floats) {
+    EXPECT_EQ(0.15625f, conbor::from_cbor<float>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b00110001), std::byte(0b00000000)})) << "16 bit float";
+    EXPECT_EQ(0.15625, conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b00110001), std::byte(0b00000000)})) << "16 bit float to double";
+    EXPECT_EQ(1.0f / 3.0f, conbor::from_cbor<float>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(26), std::byte(0b00111110), std::byte(0b10101010), std::byte(0b10101010), std::byte(0b10101011)})) << "32 bit float";
+    EXPECT_EQ(static_cast<double>(1.0f / 3.0f), conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(26), std::byte(0b00111110), std::byte(0b10101010), std::byte(0b10101010), std::byte(0b10101011)})) << "32 bit float from double";
+    EXPECT_EQ(1.0 / 3.0, conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(27), std::byte(0b00111111), std::byte(0b11010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101)})) << "64 bit float";
+    EXPECT_EQ(static_cast<float>(1.0 / 3.0), conbor::from_cbor<float>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(27), std::byte(0b00111111), std::byte(0b11010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101), std::byte(0b01010101)})) << "64 bit float read as 32 bit float";
+    EXPECT_EQ(0.0, conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b00000000), std::byte(0b00000000)})) << "16 bit zero";
+    EXPECT_EQ(-0.0, conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b10000000), std::byte(0b00000000)})) << "16 bit negative zero";
+    EXPECT_EQ(std::numeric_limits<double>::infinity(), conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b01111100), std::byte(0b00000000)})) << "16 bit inifinity";
+    EXPECT_EQ(-std::numeric_limits<double>::infinity(), conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b11111100), std::byte(0b00000000)})) << "16 bit negative inifinity";
+    EXPECT_TRUE(std::isnan(conbor::from_cbor<double>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(25), std::byte(0b01111100), std::byte(0b00000001)}))) << "16 bit nan";
 }
 
 TEST(Decoding, PositiveInteger) {
