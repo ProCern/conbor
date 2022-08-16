@@ -21,6 +21,10 @@
 #include <variant>
 #include <vector>
 
+/** WARNING: This file is unfinished.  I don't have any need of it, so I haven't
+ * finalized it at all.  it's also based on an older state of the cbor header.
+ */
+
 namespace conbor {
 class Value;
 
