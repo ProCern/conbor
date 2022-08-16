@@ -333,21 +333,18 @@ TEST(Encoding, CustomTypes) {
 }
 
 TEST(Decoding, PositiveInteger) {
-    //EXPECT_EQ(5, conbor::from_cbor<int>(std::vector<std::byte>{std::byte(5)})) << "tiny positive int";
-    /*EXPECT_EQ(conbor::to_cbor(24), (std::vector<std::byte>{std::byte(24), std::byte(24)}))
+    EXPECT_EQ(5, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{std::byte(5)})) << "tiny positive int";
+    EXPECT_EQ(24, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{std::byte(24), std::byte(24)}))
       << "1 byte positive int";
-    EXPECT_EQ(
-      conbor::to_cbor(256),
-      (std::vector<std::byte>{std::byte(25), std::byte(1), std::byte(0)}))
+    EXPECT_EQ(256,
+      conbor::from_cbor<std::int64_t>(std::vector<std::byte>{std::byte(25), std::byte(1), std::byte(0)}))
       << "2 byte positive int";
-    EXPECT_EQ(
-      conbor::to_cbor(65536),
-      (std::vector<
+    EXPECT_EQ(65536,
+      conbor::from_cbor<std::int64_t>(std::vector<
         std::byte>{std::byte(26), std::byte(0), std::byte(1), std::byte(0), std::byte(0)}))
       << "4 byte positive int";
-    EXPECT_EQ(
-      conbor::to_cbor(4294967296),
-      (std::vector<std::byte>{
+    EXPECT_EQ(4294967296,
+      conbor::from_cbor<std::int64_t>(std::vector<std::byte>{
         std::byte(27),
         std::byte(0),
         std::byte(0),
@@ -357,8 +354,90 @@ TEST(Decoding, PositiveInteger) {
         std::byte(0),
         std::byte(0),
         std::byte(0)}))
-      << "8 byte positive int";*/
+      << "8 byte positive int";
 }
+
+TEST(Decoding, NegativeInteger) {
+    EXPECT_EQ(-6, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{std::byte(1 << 5) | std::byte(5)})) << "tiny negative int";
+    EXPECT_EQ(-25, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{std::byte(1 << 5) | std::byte(24), std::byte(24)})) << "1 byte negative int";
+    EXPECT_EQ(-257, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{std::byte(1 << 5) | std::byte(25), std::byte(1), std::byte(0)})) << "2 byte negative int";
+    EXPECT_EQ(-65537, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{ std::byte(1 << 5) | std::byte(26), std::byte(0), std::byte(1), std::byte(0), std::byte(0)})) << "4 byte negative int";
+    EXPECT_EQ(-4294967297, conbor::from_cbor<std::int64_t>(std::vector<std::byte>{ std::byte(1 << 5) | std::byte(27), std::byte(0), std::byte(0), std::byte(0), std::byte(1), std::byte(0), std::byte(0), std::byte(0), std::byte(0)})) << "8 byte negative int";
+}
+
+TEST(Encoding, OwnedByteString) {
+    EXPECT_EQ((std::vector<std::byte>{std::byte(1), std::byte(3), std::byte(3), std::byte(7)}),
+      conbor::from_cbor<std::vector<std::byte>>(std::vector<std::byte>{
+        std::byte(2 << 5) | std::byte(4),
+        std::byte(1),
+        std::byte(3),
+        std::byte(3),
+        std::byte(7)}));
+}
+
+TEST(Encoding, OwnedString) {
+    EXPECT_EQ(
+      std::u8string(u8"1337"),
+      conbor::from_cbor<std::u8string>(std::vector<std::byte>{
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7')}));
+}
+
+/*TEST(Decoding, Array) {
+    EXPECT_EQ(
+      (std::vector<std::u8string>{
+          u8"1337",
+          u8"6969",
+          }),
+
+      conbor::from_cbor<std::vector<std::u8string>>(std::vector<std::byte>{
+        // Header
+        std::byte(4 << 5) | std::byte(2),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+      }));
+
+    EXPECT_EQ(
+      (std::vector<std::vector<std::u8string>>{
+          {u8"1337"},
+          {u8"6969"},
+          }),
+
+      conbor::from_cbor<std::vector<std::vector<std::u8string>>>(std::vector<std::byte>{
+        // Header
+        std::byte(4 << 5) | std::byte(2),
+        // Header
+        std::byte(4 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // Header
+        std::byte(4 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+      }));
+}*/
+
 
 /*TEST(BuildValue, Equality) {
     EXPECT_EQ(

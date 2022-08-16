@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <ranges>
@@ -73,20 +74,26 @@ concept ToCborPairRange = requires {
 };
 
 template <typename T>
-concept InputView = std::ranges::input_range<T> && std::ranges::view<T>;
+concept InputRange = std::ranges::input_range<T> && std::same_as<std::ranges::range_value_t<T>, std::byte>;
+
+template <typename T>
+concept SignedInteger = std::signed_integral<T> && (!std::same_as<T, bool>) && (!std::same_as<T, std::byte>)&&(!std::same_as<T, char>)&&(!std::same_as<T, char8_t>);
+
+template <typename T>
+concept UnsignedInteger = std::unsigned_integral<T> && (!std::same_as<T, bool>) && (!std::same_as<T, std::byte>)&&(!std::same_as<T, char>)&&(!std::same_as<T, char8_t>);
 
 /** A type that can be decoded from cbor.
  */
 template <typename T>
 concept FromCborInternal = requires(T &t, std::ranges::subrange<std::istreambuf_iterator<std::byte>> i, Adl adl) {
-    {from_cbor(i, t, adl)} -> InputView;
+    {from_cbor(i, t, adl)} -> InputRange;
 };
 
 /** A type that can be encoded to cbor.
  */
 template <typename T>
 concept FromCborExternal = requires(T &t, std::ranges::subrange<std::istreambuf_iterator<std::byte>> i) {
-    { from_cbor(i, t)} -> InputView;
+    { from_cbor(i, t)} -> InputRange;
 };
 
 template <typename T>
@@ -111,6 +118,19 @@ concept FromCborPairRange = requires {
     requires FromCbor<typename std::tuple_element<0, std::ranges::range_value_t<T>>::type>;
     requires FromCbor<typename std::tuple_element<1, std::ranges::range_value_t<T>>::type>;
 };
+
+template <typename T, typename I>
+concept PushBackable = requires (T &t, I &&i) {
+    t.push_back(std::move(i));
+};
+
+template <typename T, typename I>
+concept Insertable = requires (T &t, I &&i) {
+    t.insert(std::move(i));
+};
+
+template <typename T, typename O>
+concept Container = PushBackable<T, O> || Insertable<T, O>;
 
 /** Default error type.
  */
@@ -142,6 +162,14 @@ class IllegalSpecialFloat : public Error {
     }
 };
 
+class InvalidType : public Error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> InvalidType(Args &&...t) :
+        Error(std::forward<Args>(t)...) {
+    }
+};
+
 /** Tried to extract a count when the count wasn't normal
  */
 class SpecialCountError : public Error {
@@ -152,31 +180,20 @@ class SpecialCountError : public Error {
     }
 };
 
-/** Peek at a single byte, returning an error if input == last.
- */
-template <
-  std::input_iterator I,
-  std::sentinel_for<I> S>
-
-  requires std::same_as<std::iter_value_t<I>, std::byte>
-inline I peek(I input, S last, std::byte &output) {
-    if (input == last) {
-        throw EndOfInput("Reached end of input early");
-    }
-    output = *input;
-    return input;
-}
+template <std::ranges::range T>
+using Subrange = std::ranges::subrange<std::ranges::iterator_t<T>, std::ranges::sentinel_t<T>>;
 
 /** Read a single byte, returning an error if input == last.
  */
-template <
-  std::input_iterator I,
-  std::sentinel_for<I> S>
-  requires std::same_as<std::iter_value_t<I>, std::byte>
-inline I read(I input, S last, std::byte &output) {
-    input = peek(input, last, output);
-    ++input;
-    return input;
+template <InputRange I>
+inline Subrange<I> read(I input, std::byte &output) {
+    if (std::ranges::empty(input)) {
+        throw EndOfInput("Reached end of input early");
+    }
+    auto begin = std::ranges::begin(input);
+    output = *begin;
+    ++begin;
+    return Subrange<I>(begin, std::ranges::end(input));
 }
 
 /** The major type read from the header.
@@ -211,35 +228,41 @@ inline std::uint64_t extract(const Count count) {
         } else {
             throw SpecialCountError("Tiny count would be ambiguous");
         }
+    } else {
+        return std::visit([](const auto element) { return static_cast<std::uint64_t>(element); }, count);
     }
 }
 
-using Header = std::tuple<MajorType, Count>;
+//using Header = std::tuple<MajorType, Count>;
+struct Header {
+    MajorType type;
+    Count count;
+    constexpr Header() noexcept = default;
+    constexpr Header(MajorType type, Count count) noexcept : type(type), count(count) {
+    }
 
-// TODO: input view
-/** Peek at the header without advancing the iterator.
- */
-template <
-  std::input_iterator I,
-  std::sentinel_for<I> S>
-  requires std::same_as<std::iter_value_t<I>, std::byte>
-I peek_header(I input, S last, Header &header) noexcept {
+    constexpr auto operator<=>(const Header &other) const noexcept = default;
+};
 
-    std::byte byte;
-    input = peek(input, last, byte);
+template <InputRange I>
+  Subrange<I> read_header(I input, Header &header) noexcept {
+    std::byte byte{};
+    auto subrange = read(std::move(input), byte);
     const auto type = static_cast<MajorType>(byte >> 5);
     const auto tinycount = static_cast<std::uint8_t>(byte & std::byte(0b00011111));
 
     switch (tinycount) {
     case 24: {
-        header = Header{type, Count(std::in_place_index<1>, static_cast<uint8_t>(read(input, last)))};
+        subrange = read(std::move(subrange), byte);
+        header = Header{type, Count(std::in_place_index<1>, static_cast<uint8_t>(byte))};
         break;
     }
 
     case 25: {
         uint16_t count = 0;
         for (size_t i = 0; i < sizeof(count); ++i) {
-            count = (count << 8) | static_cast<decltype(count)>(read(input, last));
+            subrange = read(std::move(subrange), byte);
+            count = (count << 8) | static_cast<decltype(count)>(byte);
         }
         header = Header{type, Count(std::in_place_index<2>, count)};
         break;
@@ -248,7 +271,8 @@ I peek_header(I input, S last, Header &header) noexcept {
     case 26: {
         uint32_t count = 0;
         for (size_t i = 0; i < sizeof(count); ++i) {
-            count = (count << 8) | static_cast<decltype(count)>(read(input, last));
+            subrange = read(std::move(subrange), byte);
+            count = (count << 8) | static_cast<decltype(count)>(byte);
         }
         header = Header{type, Count(std::in_place_index<3>, count)};
         break;
@@ -257,7 +281,8 @@ I peek_header(I input, S last, Header &header) noexcept {
     case 27: {
         uint64_t count = 0;
         for (size_t i = 0; i < sizeof(count); ++i) {
-            count = (count << 8) | static_cast<decltype(count)>(read(input, last));
+            subrange = read(std::move(subrange), byte);
+            count = (count << 8) | static_cast<decltype(count)>(byte);
         }
         header = Header{type, Count(std::in_place_index<4>, count)};
         break;
@@ -268,18 +293,7 @@ I peek_header(I input, S last, Header &header) noexcept {
         break;
     }
     }
-    return input;
-}
-
-// TODO: input view
-template <
-  std::input_iterator I,
-  std::sentinel_for<I> S>
-  requires std::same_as<std::iter_value_t<I>, std::byte>
-  I read_header(I input, S last, Header &header) noexcept {
-      input = peek_header(input, last, header);
-      ++input;
-      return input;
+    return subrange;
 }
 
 /** Write the header.
@@ -385,6 +399,36 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     return std::ranges::copy(value, output).out;
 }
 
+/** Decode the byte string.
+ */
+template <InputRange I, Container<std::byte> O>
+Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    switch (header.type) {
+        case MajorType::ByteString: {
+            const auto count = extract(header.count);
+            for (size_t i = 0; i < count; ++i) {
+                std::byte byte{};
+                subrange = read(std::move(subrange), byte);
+                if constexpr (PushBackable<O, std::byte>) {
+                    value.push_back(byte);
+                } else {
+                    *value = byte;
+                    ++value;
+                }
+            }
+            break;
+        };
+
+        default: {
+            throw InvalidType("Tried to read a byte string, but didn't get one");
+        }
+    }
+
+    return subrange;
+}
+
 // maybe TODO: indefinite-sized byte string
 
 /** Encode the utf8 string.
@@ -404,10 +448,41 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
       output).out;
 }
 
-// Signed integer
-template <std::output_iterator<std::byte> O, std::signed_integral I>
-requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, char8_t>)
-    O to_cbor(O output, const I value, [[maybe_unused]] Adl adl) {
+/** Decode the UTF-8 string.
+ */
+template <InputRange I, typename O>
+requires Container<O, char8_t> || Container<O, char>
+Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+    using OutputType = O::value_type;
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    switch (header.type) {
+        case MajorType::Utf8String: {
+            const auto count = extract(header.count);
+            for (size_t i = 0; i < count; ++i) {
+                std::byte byte{};
+                subrange = read(std::move(subrange), byte);
+                const auto c = static_cast<OutputType>(byte);
+                if constexpr (PushBackable<O, OutputType>) {
+                    value.push_back(c);
+                } else {
+                    *value = c;
+                    ++value;
+                }
+            }
+            break;
+        };
+
+        default: {
+            throw InvalidType("Tried to read a byte string, but didn't get one");
+        }
+    }
+
+    return subrange;
+}
+
+template <std::output_iterator<std::byte> O, SignedInteger I>
+O to_cbor(O output, const I value, [[maybe_unused]] Adl adl) {
     if (value < 0) {
         return write_header(output, MajorType::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
     } else {
@@ -415,22 +490,28 @@ requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_
     }
 }
 
-// Signed integer
-//template <InputView I, std::signed_integral Integer>
-//requires (!std::same_as<Integer, bool>) && (!std::same_as<Integer, std::byte>)&&(!std::same_as<Integer, char>)&&(!std::same_as<Integer, char8_t>)
-    //std::ranges::subrange<typename decltype(std::ranges::begin(I)), typename decltype(std::ranges::end(I))> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
-        //Header header;
-        //auto iter = read_header(
-    //if (value < 0) {
-        //return write_header(output, MajorType::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
-    //} else {
-        //return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
-    //}
-//}
+template <InputRange I, SignedInteger Integer>
+Subrange<I> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    switch (header.type) {
+        case MajorType::NegativeInteger: {
+            value = -static_cast<Integer>(extract(header.count)) - 1;
+            break;
+        }
+        case MajorType::PositiveInteger: {
+            value = extract(header.count);
+            break;
+        }
+        default: {
+            throw InvalidType("Tried to read a signed integer, but didn't get one");
+        }
+    }
+    return subrange;
+}
 
 // Unsigned integer
-template <std::output_iterator<std::byte> O, std::unsigned_integral I>
-requires (!std::same_as<I, bool>) && (!std::same_as<I, std::byte>)&&(!std::same_as<I, char>)&&(!std::same_as<I, char8_t>)
+template <std::output_iterator<std::byte> O, UnsignedInteger I>
 O to_cbor(O output, const I value, [[maybe_unused]] Adl adl) {
     return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
 }
@@ -550,6 +631,21 @@ O to_cbor(O output, const T &value) {
 std::vector<std::byte> to_cbor(const ToCbor auto &value) {
     std::vector<std::byte> output;
     to_cbor(std::back_inserter(output), value);
+    return output;
+}
+
+/** Decode an internal cbor value and automatically invoke ADL
+ */
+template <InputRange I, FromCborInternal O>
+Subrange<I> from_cbor(I input, O &value) {
+    return from_cbor(std::move(input), value, Adl{});
+}
+
+template <FromCbor O, InputRange I>
+requires std::default_initializable<O>
+O from_cbor(I &&range) {
+    O output;
+    from_cbor(std::ranges::subrange(range), output);
     return output;
 }
 } // namespace conbor
