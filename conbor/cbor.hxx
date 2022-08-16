@@ -132,6 +132,28 @@ concept Insertable = requires (T &t, I &&i) {
 template <typename T, typename O>
 concept Container = PushBackable<T, O> || Insertable<T, O>;
 
+/** Push into the PushBackable.
+ */
+template <typename O>
+inline void push_into(PushBackable<O> auto &container, O &&item) {
+    container.push_back(std::move(item));
+}
+
+/** Insert into the Insertable.
+ */
+template <typename O>
+inline void push_into(Insertable<O> auto &container, O &&item) {
+    container.insert(std::move(item));
+}
+
+/** Push into the iterator
+ */
+template <typename O>
+inline void push_into(std::output_iterator<O> auto &container, O &&item) {
+    *container = std::move(item);
+    ++container;
+}
+
 /** Default error type.
  */
 class Error : public std::runtime_error {
@@ -183,15 +205,23 @@ class SpecialCountError : public Error {
 template <std::ranges::range T>
 using Subrange = std::ranges::subrange<std::ranges::iterator_t<T>, std::ranges::sentinel_t<T>>;
 
-/** Read a single byte, returning an error if input == last.
+/** Peek a single byte, returning an error if input is empty.
  */
 template <InputRange I>
-inline Subrange<I> read(I input, std::byte &output) {
+inline std::byte peek(I input) {
     if (std::ranges::empty(input)) {
         throw EndOfInput("Reached end of input early");
     }
     auto begin = std::ranges::begin(input);
-    output = *begin;
+    return *begin;
+}
+
+/** Read a single byte, returning an error if input is empty.
+ */
+template <InputRange I>
+inline Subrange<I> read(I input, std::byte &output) {
+    output = peek(input);
+    auto begin = std::ranges::begin(input);
     ++begin;
     return Subrange<I>(begin, std::ranges::end(input));
 }
@@ -217,14 +247,17 @@ using Count = std::variant<std::uint8_t, std::uint8_t, std::uint16_t, std::uint3
 
 /** Extract a full count from the variant,  throwing an error if the count
  * wouldn't be a legal count or would be ambiguous (like any value in the tiny
- * field of more than 23).  This means that getting a 31 in the tiny field as a
- * break value is illegal.
+ * field of more than 23 other than 31).
+ * Returns an empty optional if it was a tiny count of 31, indicating
+ * indeterminant.
  */
-inline std::uint64_t extract(const Count count) {
+inline std::optional<std::uint64_t> extract(const Count count) {
     if (count.index() == 0) {
         const auto tinycount = std::get<0>(count);
         if (tinycount < 24) {
             return tinycount;
+        } else if (tinycount == 31) {
+            return std::nullopt;
         } else {
             throw SpecialCountError("Tiny count would be ambiguous");
         }
@@ -243,6 +276,16 @@ struct Header {
 
     constexpr auto operator<=>(const Header &other) const noexcept = default;
 };
+
+/** Peek the header, without changing input.
+ */
+template <InputRange I>
+  std::tuple<MajorType, uint8_t> peek_header(I input) noexcept {
+    const std::byte byte = peek(std::move(input));
+    const auto type = static_cast<MajorType>(byte >> 5);
+    const auto tinycount = static_cast<std::uint8_t>(byte & std::byte(0b00011111));
+    return {type, tinycount};
+}
 
 template <InputRange I>
   Subrange<I> read_header(I input, Header &header) noexcept {
@@ -411,11 +454,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
             for (size_t i = 0; i < count; ++i) {
                 std::byte byte{};
                 subrange = read(std::move(subrange), byte);
-                if constexpr (PushBackable<O, std::byte>) {
-                    value.push_back(byte);
-                } else if constexpr (Insertable<O, std::byte>) {
-                    value.insert(byte);
-                }
+                push_into(value, std::move(byte));
             }
             break;
         };
@@ -462,11 +501,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 std::byte byte{};
                 subrange = read(std::move(subrange), byte);
                 const auto c = static_cast<OutputType>(byte);
-                if constexpr (PushBackable<O, OutputType>) {
-                    value.push_back(c);
-                } else if constexpr (Insertable<O, OutputType>) {
-                    value.insert(byte);
-                }
+                push_into(value, std::move(c));
             }
             break;
         };
@@ -494,11 +529,11 @@ Subrange<I> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
     auto subrange = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::NegativeInteger: {
-            value = -static_cast<Integer>(extract(header.count)) - 1;
+            value = -static_cast<Integer>(extract(header.count).value()) - 1;
             break;
         }
         case MajorType::PositiveInteger: {
-            value = extract(header.count);
+            value = extract(header.count).value();
             break;
         }
         default: {
@@ -509,9 +544,25 @@ Subrange<I> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
 }
 
 // Unsigned integer
-template <std::output_iterator<std::byte> O, UnsignedInteger I>
-O to_cbor(O output, const I value, [[maybe_unused]] Adl adl) {
+template <std::output_iterator<std::byte> O>
+O to_cbor(O output, const UnsignedInteger auto value, [[maybe_unused]] Adl adl) {
     return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
+}
+
+template <InputRange I>
+Subrange<I> from_cbor(I input, UnsignedInteger auto &value, [[maybe_unused]] Adl adl) {
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    switch (header.type) {
+        case MajorType::PositiveInteger: {
+            value = extract(header.count).value();
+            break;
+        }
+        default: {
+            throw InvalidType("Tried to read an unsigned integer, but didn't get one");
+        }
+    }
+    return subrange;
 }
 
 // Boolean.
@@ -522,9 +573,45 @@ O to_cbor(O output, const std::same_as<bool> auto value, [[maybe_unused]] Adl ad
     return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<0>, value ? 21 : 20)});
 }
 
+template <InputRange I>
+Subrange<I> from_cbor(I input, std::same_as<bool> auto &value, [[maybe_unused]] Adl adl) {
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    switch (header.type) {
+        case MajorType::SpecialFloat: {
+            switch (extract(header.count).value()) {
+                case 20:
+                    value = false;
+                    break;
+                case 21:
+                    value = true;
+                    break;
+                default: {
+                    throw InvalidType("Tried to read a boolean, but didn't get one");
+                }
+            }
+            break;
+        }
+        default: {
+            throw InvalidType("Tried to read a boolean, but didn't get one");
+        }
+    }
+    return subrange;
+}
+
 template <std::output_iterator<std::byte> O>
 O to_cbor(O output, const std::nullptr_t, [[maybe_unused]] Adl adl) {
     return write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<0>, 22)});
+}
+
+template <InputRange I>
+Subrange<I> from_cbor(I input, [[maybe_unused]] std::nullptr_t &value, [[maybe_unused]] Adl adl) {
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    if (!(header.type == MajorType::SpecialFloat && extract(header.count).value() == 22)) {
+        throw InvalidType("Tried to read a null pointer, but didn't get one");
+    }
+    return subrange;
 }
 
 template <std::output_iterator<std::byte> O>
@@ -606,11 +693,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                     subrange = from_cbor(subrange, item);
                 }
 
-                if constexpr (PushBackable<O, OutputType>) {
-                    value.push_back(std::move(item));
-                } else if constexpr (Insertable<O, OutputType>) {
-                    value.insert(std::move(item));
-                }
+                push_into(value, std::move(item));
             }
             break;
         };
@@ -650,6 +733,45 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     }
 
     return output;
+}
+
+/** Encode an optional.
+ */
+template <std::output_iterator<std::byte> O, ToCbor Inner>
+O to_cbor(O output, const std::optional<Inner> &value, [[maybe_unused]] Adl adl) {
+    if (value) {
+        if constexpr (ToCborInternal<std::remove_cv_t<std::remove_reference_t<decltype(*value)>>>) {
+            return to_cbor(std::move(output), *value, adl);
+        } else {
+            return to_cbor(std::move(output), *value);
+        }
+    } else {
+        return to_cbor(std::move(output), nullptr, adl);
+    }
+}
+
+/** Decode an optional.
+ */
+template <InputRange I, typename O>
+requires FromCbor<O> && std::default_initializable<O>
+Subrange<I> from_cbor(I input, std::optional<O> &value, [[maybe_unused]] Adl adl) {
+    MajorType type{};
+    uint8_t tiny_count{};
+    std::tie(type, tiny_count) = peek_header(input);
+
+    if (type == MajorType::SpecialFloat && tiny_count == 22) {
+        value.reset();
+        auto begin = std::ranges::begin(input);
+        ++begin;
+        return Subrange<I>(begin, std::ranges::end(input));
+    } else {
+        value.emplace();
+        if constexpr (ToCborInternal<O>) {
+            return from_cbor(std::move(input), *value, adl);
+        } else {
+            return from_cbor(std::move(input), *value);
+        }
+    }
 }
 
 /** Encode an internal cbor value and automatically invoke ADL

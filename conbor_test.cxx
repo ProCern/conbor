@@ -5,6 +5,30 @@
 #include "conbor/cbor.hxx"
 #include <gtest/gtest.h>
 
+TEST(Encoding, Specials) {
+    EXPECT_EQ(
+            conbor::to_cbor(false),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(20)}))
+      << "boolean false";
+    EXPECT_EQ(
+            conbor::to_cbor(true),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(21)}))
+      << "boolean true";
+    EXPECT_EQ(
+            conbor::to_cbor(nullptr),
+      (std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}))
+      << "null";
+    EXPECT_EQ(
+            conbor::to_cbor(std::optional<int>{}),
+      std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)})
+      << "optional null";
+
+    EXPECT_EQ(
+            conbor::to_cbor(std::optional<int>{5}),
+      (std::vector<std::byte>{std::byte(5)}))
+      << "optional set";
+}
+
 TEST(Encoding, PositiveInteger) {
     EXPECT_EQ(conbor::to_cbor(5), std::vector<std::byte>{std::byte(5)})
       << "tiny positive int";
@@ -330,6 +354,30 @@ TEST(Encoding, CustomTypes) {
         std::byte('a'),
         std::byte('r'),
       })) << "Bidirectional decoding of internal and external types to be sure ADL does everything it should";
+}
+
+TEST(Decoding, Specials) {
+    EXPECT_EQ(
+            false,
+      conbor::from_cbor<bool>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(20)}))
+      << "boolean false";
+    EXPECT_EQ(
+            true,
+      conbor::from_cbor<bool>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(21)}))
+      << "boolean true";
+    EXPECT_EQ(
+            nullptr,
+      conbor::from_cbor<std::nullptr_t>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}))
+      << "null";
+    EXPECT_EQ(
+            std::optional<int>{},
+      conbor::from_cbor<std::optional<int>>(std::vector<std::byte>{std::byte(7 << 5) | std::byte(22)}))
+      << "optional null";
+
+    EXPECT_EQ(
+            std::optional<int>{5},
+      conbor::from_cbor<std::optional<int>>(std::vector<std::byte>{std::byte(5)}))
+      << "optional set";
 }
 
 TEST(Decoding, PositiveInteger) {
