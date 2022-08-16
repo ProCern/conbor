@@ -386,7 +386,7 @@ TEST(Encoding, OwnedString) {
         std::byte('7')}));
 }
 
-/*TEST(Decoding, Array) {
+TEST(Decoding, Array) {
     EXPECT_EQ(
       (std::vector<std::u8string>{
           u8"1337",
@@ -436,7 +436,7 @@ TEST(Encoding, OwnedString) {
         std::byte('6'),
         std::byte('9'),
       }));
-}*/
+}
 
 
 /*TEST(BuildValue, Equality) {

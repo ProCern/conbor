@@ -413,9 +413,8 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 subrange = read(std::move(subrange), byte);
                 if constexpr (PushBackable<O, std::byte>) {
                     value.push_back(byte);
-                } else {
-                    *value = byte;
-                    ++value;
+                } else if constexpr (Insertable<O, std::byte>) {
+                    value.insert(byte);
                 }
             }
             break;
@@ -465,9 +464,8 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 const auto c = static_cast<OutputType>(byte);
                 if constexpr (PushBackable<O, OutputType>) {
                     value.push_back(c);
-                } else {
-                    *value = c;
-                    ++value;
+                } else if constexpr (Insertable<O, OutputType>) {
+                    value.insert(byte);
                 }
             }
             break;
@@ -587,6 +585,42 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
         output = write_header(output, Header{MajorType::SpecialFloat, Count(std::in_place_index<0>, 31)});
     }
     return output;
+}
+
+/** Decode an array
+ */
+template <InputRange I, typename O>
+requires Container<O, typename O::value_type> && FromCbor<typename O::value_type> && std::default_initializable<typename O::value_type>
+Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+    using OutputType = O::value_type;
+    Header header;
+    auto subrange = read_header(std::move(input), header);
+    switch (header.type) {
+        case MajorType::Array: {
+            const auto count = extract(header.count);
+            for (size_t i = 0; i < count; ++i) {
+                OutputType item;
+                if constexpr (ToCborInternal<OutputType>) {
+                    subrange = from_cbor(subrange, item, adl);
+                } else {
+                    subrange = from_cbor(subrange, item);
+                }
+
+                if constexpr (PushBackable<O, OutputType>) {
+                    value.push_back(std::move(item));
+                } else if constexpr (Insertable<O, OutputType>) {
+                    value.insert(std::move(item));
+                }
+            }
+            break;
+        };
+
+        default: {
+            throw InvalidType("Tried to read an array, but didn't get one");
+        }
+    }
+
+    return subrange;
 }
 
 /** Encode a sized map.
