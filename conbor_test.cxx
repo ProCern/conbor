@@ -554,6 +554,67 @@ TEST(Decoding, Array) {
       }));
 }
 
+TEST(Decoding, Map) {
+    EXPECT_EQ(
+      (std::map<std::u8string, std::u8string>{
+          {u8"1337",
+          u8"6969",
+          }
+          }),
+
+      (conbor::from_cbor<std::map<std::u8string, std::u8string>>(std::vector<std::byte>{
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+      })));
+
+    EXPECT_EQ(
+      (std::map<std::map<std::u8string, std::u8string>, std::map<std::u8string, std::u8string>>{
+              {{{u8"1337", u8"6969"}}, {{u8"foo", u8"bar"}}},
+          }),
+
+      (conbor::from_cbor<std::map<std::map<std::u8string, std::u8string>, std::map<std::u8string, std::u8string>>>(std::vector<std::byte>{
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('1'),
+        std::byte('3'),
+        std::byte('3'),
+        std::byte('7'),
+        // String
+        std::byte(3 << 5) | std::byte(4),
+        std::byte('6'),
+        std::byte('9'),
+        std::byte('6'),
+        std::byte('9'),
+        // Header
+        std::byte(5 << 5) | std::byte(1),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('f'),
+        std::byte('o'),
+        std::byte('o'),
+        // String
+        std::byte(3 << 5) | std::byte(3),
+        std::byte('b'),
+        std::byte('a'),
+        std::byte('r'),
+      })));
+}
 
 /*TEST(BuildValue, Equality) {
     EXPECT_EQ(
