@@ -9,22 +9,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(BUILD_TESTS "Build testing suite" OFF)
+
 add_library(
     conbor
     INTERFACE
     )
-
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG release-1.12.1
-)
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-set_property(TARGET conbor PROPERTY POSITION_INDEPENDENT_CODE TRUE)
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
@@ -43,7 +33,6 @@ install(TARGETS conbor EXPORT conborTargets
 install(EXPORT conborTargets NAMESPACE conbor:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/conbor")
 
 
-
 configure_package_config_file("conborConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/conborConfig.cmake"
     INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/conbor"
@@ -60,17 +49,29 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/conborConfig.cmake
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/conbor"
         )
 
-enable_testing()
+if(BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG release-1.12.1
+        )
+    # For Windows: Prevent overriding the parent project's compiler/linker settings
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
 
-add_executable(
-  conbor_test
-  conbor_test.cxx
-)
-target_link_libraries(
-  conbor_test
-  GTest::gtest_main
-  conbor
-)
+    enable_testing()
 
-include(GoogleTest)
-gtest_discover_tests(conbor_test)
+    add_executable(
+        conbor_test
+        conbor_test.cxx
+        )
+    target_link_libraries(
+        conbor_test
+        GTest::gtest_main
+        conbor
+        )
+
+    include(GoogleTest)
+    gtest_discover_tests(conbor_test)
+endif()

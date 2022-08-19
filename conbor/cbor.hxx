@@ -74,7 +74,7 @@ concept ToCborPairRange = requires {
 };
 
 template <typename T>
-concept InputRange = std::ranges::input_range<T> && std::same_as<std::ranges::range_value_t<T>, std::byte>;
+concept InputRange = std::ranges::input_range<T> && std::ranges::borrowed_range<T> && std::same_as<std::ranges::range_value_t<T>, std::byte>;
 
 template <typename T>
 concept SignedInteger = std::signed_integral<T> && (!std::same_as<T, bool>) && (!std::same_as<T, std::byte>)&&(!std::same_as<T, char>)&&(!std::same_as<T, char8_t>);
@@ -85,15 +85,15 @@ concept UnsignedInteger = std::unsigned_integral<T> && (!std::same_as<T, bool>) 
 /** A type that can be decoded from cbor.
  */
 template <typename T>
-concept FromCborInternal = requires(T &t, std::ranges::subrange<std::istreambuf_iterator<std::byte>> i, Adl adl) {
-    {from_cbor(i, t, adl)} -> InputRange;
+concept FromCborInternal = requires(T &t, std::ranges::subrange<const std::byte *> i, Adl adl) {
+    { from_cbor(i, t, adl) } -> InputRange;
 };
 
 /** A type that can be encoded to cbor.
  */
 template <typename T>
-concept FromCborExternal = requires(T &t, std::ranges::subrange<std::istreambuf_iterator<std::byte>> i) {
-    { from_cbor(i, t)} -> InputRange;
+concept FromCborExternal = requires(T &t, std::ranges::subrange<const std::byte *> i) {
+    { from_cbor(i, t) } -> InputRange;
 };
 
 template <typename T>
@@ -223,11 +223,11 @@ inline std::byte peek(I input) {
 /** Read a single byte, returning an error if input is empty.
  */
 template <InputRange I>
-inline Subrange<I> read(I input, std::byte &output) {
+inline I read(I input, std::byte &output) {
     output = peek(input);
     auto begin = std::ranges::begin(input);
     ++begin;
-    return Subrange<I>(begin, std::ranges::end(input));
+    return I{begin, std::ranges::end(input)};
 }
 
 /** The major type read from the header.
@@ -325,15 +325,15 @@ inline T from_be_bytes(std::array<std::byte, sizeof(T)> input) {
 }
 
 template <InputRange I>
-  Subrange<I> read_header(I input, Header &header) noexcept {
+  I read_header(I input, Header &header) noexcept {
     std::byte byte{};
-    auto subrange = read(std::move(input), byte);
+    input = read(std::move(input), byte);
     const auto type = static_cast<MajorType>(byte >> 5);
     const auto tinycount = static_cast<std::uint8_t>(byte & std::byte(0b00011111));
 
     switch (tinycount) {
     case 24: {
-        subrange = read(std::move(subrange), byte);
+        input = read(std::move(input), byte);
         header = Header{type, Count(std::in_place_index<1>, static_cast<uint8_t>(byte))};
         break;
     }
@@ -341,7 +341,7 @@ template <InputRange I>
     case 25: {
         std::array<std::byte, 2> count;
         for (size_t i = 0; i < sizeof(count); ++i) {
-            subrange = read(std::move(subrange), byte);
+            input = read(std::move(input), byte);
             count[i] = byte;
         }
         header = Header{type, Count(std::in_place_index<2>, from_be_bytes<uint16_t>(count))};
@@ -351,7 +351,7 @@ template <InputRange I>
     case 26: {
         std::array<std::byte, 4> count;
         for (size_t i = 0; i < sizeof(count); ++i) {
-            subrange = read(std::move(subrange), byte);
+            input = read(std::move(input), byte);
             count[i] = byte;
         }
         header = Header{type, Count(std::in_place_index<3>, from_be_bytes<uint32_t>(count))};
@@ -361,7 +361,7 @@ template <InputRange I>
     case 27: {
         std::array<std::byte, 8> count;
         for (size_t i = 0; i < sizeof(count); ++i) {
-            subrange = read(std::move(subrange), byte);
+            input = read(std::move(input), byte);
             count[i] = byte;
         }
         header = Header{type, Count(std::in_place_index<4>, from_be_bytes<uint64_t>(count))};
@@ -373,7 +373,7 @@ template <InputRange I>
         break;
     }
     }
-    return subrange;
+    return input;
 }
 
 /** Write the header.
@@ -445,15 +445,15 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
 /** Decode the byte string.
  */
 template <InputRange I, Container<std::byte> O>
-Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::ByteString: {
             const auto count = extract(header.count).value();
             for (size_t i = 0; i < count; ++i) {
                 std::byte byte{};
-                subrange = read(std::move(subrange), byte);
+                input = read(std::move(input), byte);
                 push_into(value, std::move(byte));
             }
             break;
@@ -464,7 +464,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
         }
     }
 
-    return subrange;
+    return input;
 }
 
 // maybe TODO: indefinite-sized byte string
@@ -490,16 +490,16 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
  */
 template <InputRange I, typename O>
 requires Container<O, char8_t> || Container<O, char>
-Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
-    using OutputType = O::value_type;
+I from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+    using OutputType = typename O::value_type;
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::Utf8String: {
             const auto count = extract(header.count).value();
             for (size_t i = 0; i < count; ++i) {
                 std::byte byte{};
-                subrange = read(std::move(subrange), byte);
+                input = read(std::move(input), byte);
                 const auto c = static_cast<OutputType>(byte);
                 push_into(value, std::move(c));
             }
@@ -511,7 +511,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
         }
     }
 
-    return subrange;
+    return input;
 }
 
 template <std::output_iterator<std::byte> O>
@@ -524,9 +524,9 @@ O to_cbor(O output, const SignedInteger auto value, [[maybe_unused]] Adl adl) {
 }
 
 template <InputRange I, SignedInteger Integer>
-Subrange<I> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::NegativeInteger: {
             value = -static_cast<Integer>(extract(header.count).value()) - 1;
@@ -540,7 +540,7 @@ Subrange<I> from_cbor(I input, Integer &value, [[maybe_unused]] Adl adl) {
             throw InvalidType("Tried to read a signed integer, but didn't get one");
         }
     }
-    return subrange;
+    return input;
 }
 
 // Unsigned integer
@@ -550,9 +550,9 @@ O to_cbor(O output, const UnsignedInteger auto value, [[maybe_unused]] Adl adl) 
 }
 
 template <InputRange I>
-Subrange<I> from_cbor(I input, UnsignedInteger auto &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, UnsignedInteger auto &value, [[maybe_unused]] Adl adl) {
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::PositiveInteger: {
             value = extract(header.count).value();
@@ -562,7 +562,7 @@ Subrange<I> from_cbor(I input, UnsignedInteger auto &value, [[maybe_unused]] Adl
             throw InvalidType("Tried to read an unsigned integer, but didn't get one");
         }
     }
-    return subrange;
+    return input;
 }
 
 // Boolean.
@@ -574,9 +574,9 @@ O to_cbor(O output, const std::same_as<bool> auto value, [[maybe_unused]] Adl ad
 }
 
 template <InputRange I>
-Subrange<I> from_cbor(I input, std::same_as<bool> auto &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, std::same_as<bool> auto &value, [[maybe_unused]] Adl adl) {
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::SpecialFloat: {
             switch (extract(header.count).value()) {
@@ -596,7 +596,7 @@ Subrange<I> from_cbor(I input, std::same_as<bool> auto &value, [[maybe_unused]] 
             throw InvalidType("Tried to read a boolean, but didn't get one");
         }
     }
-    return subrange;
+    return input;
 }
 
 template <std::output_iterator<std::byte> O>
@@ -605,13 +605,13 @@ O to_cbor(O output, const std::nullptr_t, [[maybe_unused]] Adl adl) {
 }
 
 template <InputRange I>
-Subrange<I> from_cbor(I input, [[maybe_unused]] std::nullptr_t &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, [[maybe_unused]] std::nullptr_t value, [[maybe_unused]] Adl adl) {
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     if (!(header.type == MajorType::SpecialFloat && extract(header.count).value() == 22)) {
         throw InvalidType("Tried to read a null pointer, but didn't get one");
     }
-    return subrange;
+    return input;
 }
 
 /** Convert from float to float16 only if it can be done losslessly.
@@ -748,7 +748,7 @@ O to_cbor(O output, const std::floating_point auto value, [[maybe_unused]] Adl a
 }
 
 template <InputRange I>
-Subrange<I> from_cbor(I input, std::floating_point auto &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, std::floating_point auto &value, [[maybe_unused]] Adl adl) {
     static_assert(sizeof(float) == 4, "floats must be 4 bytes");
     static_assert(sizeof(double) == 8, "doubles must be 8 bytes");
     static_assert(
@@ -756,7 +756,7 @@ Subrange<I> from_cbor(I input, std::floating_point auto &value, [[maybe_unused]]
       "mixed endian architectures can not be supported yet");
 
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     if (header.type != MajorType::SpecialFloat) {
         throw InvalidType("Tried to read a float, but didn't get one");
     }
@@ -783,7 +783,7 @@ Subrange<I> from_cbor(I input, std::floating_point auto &value, [[maybe_unused]]
         }
     }
 
-    return subrange;
+    return input;
 }
 
 /** Encode an array.
@@ -811,10 +811,10 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
 /** Decode an array
  */
 template <InputRange I, FromCborContainer O>
-Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
-    using OutputType = O::value_type;
+I from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+    using OutputType = typename O::value_type;
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::Array: {
             const auto count = extract(header.count);
@@ -823,9 +823,9 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 for (size_t i = 0; i < *count; ++i) {
                     OutputType item;
                     if constexpr (FromCborInternal<OutputType>) {
-                        subrange = Subrange<I>(from_cbor(subrange, item, adl));
+                        input = from_cbor(std::move(input), item, adl);
                     } else {
-                        subrange = Subrange<I>(from_cbor(subrange, item));
+                        input = from_cbor(std::move(input), item);
                     }
 
                     push_into(value, std::move(item));
@@ -836,13 +836,17 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                     OutputType item;
 
                     if constexpr (FromCborInternal<OutputType>) {
-                        subrange = Subrange<I>(from_cbor(subrange, item, adl));
+                        input = from_cbor(std::move(input), item, adl);
                     } else {
-                        subrange = Subrange<I>(from_cbor(subrange, item));
+                        input = from_cbor(std::move(input), item);
                     }
 
                     push_into(value, std::move(item));
                 }
+
+                Header header;
+                // Pop off indefinite terminator
+                return read_header(std::move(input), header);
             }
             break;
         };
@@ -852,7 +856,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
         }
     }
 
-    return subrange;
+    return input;
 }
 
 /** Encode a map.
@@ -887,13 +891,13 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
 /** Decode a map
  */
 template <InputRange I, FromCborPairContainer O>
-Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
-    using OutputType = O::value_type;
-    using KeyType = std::remove_cv_t<typename std::tuple_element<0, OutputType>::type>;
-    using ValueType = std::tuple_element<1, OutputType>::type;
+I from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
+    using OutputType = typename O::value_type;
+    using KeyType = typename std::remove_cv_t<typename std::tuple_element<0, OutputType>::type>;
+    using ValueType = typename std::tuple_element<1, OutputType>::type;
 
     Header header;
-    auto subrange = read_header(std::move(input), header);
+    input = read_header(std::move(input), header);
     switch (header.type) {
         case MajorType::Map: {
             const auto count = extract(header.count);
@@ -902,16 +906,16 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 for (size_t i = 0; i < *count; ++i) {
                     KeyType output_key;
                     if constexpr (FromCborInternal<KeyType>) {
-                        subrange = Subrange<I>(from_cbor(subrange, output_key, adl));
+                        input = from_cbor(std::move(input), output_key, adl);
                     } else {
-                        subrange = Subrange<I>(from_cbor(subrange, output_key));
+                        input = from_cbor(std::move(input), output_key);
                     }
 
                     ValueType output_value;
                     if constexpr (FromCborInternal<ValueType>) {
-                        subrange = Subrange<I>(from_cbor(subrange, output_value, adl));
+                        input = from_cbor(std::move(input), output_value, adl);
                     } else {
-                        subrange = Subrange<I>(from_cbor(subrange, output_value));
+                        input = from_cbor(std::move(input), output_value);
                     }
 
                     push_into(value, OutputType{std::move(output_key), std::move(output_value)});
@@ -921,20 +925,24 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
                 while (peek_header(input) != std::tuple<MajorType, uint8_t>(MajorType::SpecialFloat, 31)) {
                     KeyType output_key;
                     if constexpr (FromCborInternal<KeyType>) {
-                        subrange = Subrange<I>(from_cbor(subrange, output_key, adl));
+                        input = from_cbor(std::move(input), output_key, adl);
                     } else {
-                        subrange = Subrange<I>(from_cbor(subrange, output_key));
+                        input = from_cbor(std::move(input), output_key);
                     }
 
                     ValueType output_value;
                     if constexpr (FromCborInternal<ValueType>) {
-                        subrange = Subrange<I>(from_cbor(subrange, output_value, adl));
+                        input = from_cbor(std::move(input), output_value, adl);
                     } else {
-                        subrange = Subrange<I>(from_cbor(subrange, output_value));
+                        input = from_cbor(std::move(input), output_value);
                     }
 
                     push_into(value, OutputType{std::move(output_key), std::move(output_value)});
                 }
+
+                Header header;
+                // Pop off indefinite terminator
+                return read_header(std::move(input), header);
             }
             break;
         };
@@ -944,7 +952,7 @@ Subrange<I> from_cbor(I input, O &value, [[maybe_unused]] Adl adl) {
         }
     }
 
-    return subrange;
+    return input;
 }
 
 /** Encode an optional.
@@ -966,19 +974,19 @@ O to_cbor(O output, const std::optional<Inner> &value, [[maybe_unused]] Adl adl)
  */
 template <InputRange I, typename O>
 requires FromCbor<O> && std::default_initializable<O>
-Subrange<I> from_cbor(I input, std::optional<O> &value, [[maybe_unused]] Adl adl) {
+I from_cbor(I input, std::optional<O> &value, [[maybe_unused]] Adl adl) {
     if (peek_header(input) == std::tuple<MajorType, uint8_t>(MajorType::SpecialFloat, 22)) {
         // null
         value.reset();
         auto begin = std::ranges::begin(input);
         ++begin;
-        return Subrange<I>(begin, std::ranges::end(input));
+        return I{begin, std::ranges::end(input)};
     } else {
         value.emplace();
         if constexpr (FromCborInternal<O>) {
-            return Subrange<I>(from_cbor(std::move(input), *value, adl));
+            return from_cbor(std::move(input), *value, adl);
         } else {
-            return Subrange<I>(from_cbor(std::move(input), *value));
+            return from_cbor(std::move(input), *value);
         }
     }
 }
@@ -1002,12 +1010,24 @@ std::vector<std::byte> to_cbor(const ToCbor auto &value) {
 /** Decode an internal cbor value and automatically invoke ADL
  */
 template <InputRange I, FromCborInternal O>
-Subrange<I> from_cbor(I input, O &value) {
-    return Subrange<I>(from_cbor(std::move(input), value, Adl{}));
+I from_cbor(I input, O &value) {
+    return from_cbor(std::move(input), value, Adl{});
 }
 
-template <FromCbor O, InputRange I>
-requires std::default_initializable<O>
+template <std::ranges::input_range I, FromCborInternal O>
+requires (!InputRange<I>)
+auto from_cbor(I &&input, O &value) {
+    return from_cbor(std::ranges::subrange(input), value, Adl{});
+}
+
+template <std::ranges::input_range I, FromCborExternal O>
+requires (!InputRange<I>) && (!FromCborExternal<O>)
+auto from_cbor(I &&input, O &value) {
+    return from_cbor(std::ranges::subrange(input), value);
+}
+
+template <FromCbor O, std::ranges::input_range I>
+requires std::default_initializable<O> && std::same_as<std::ranges::range_value_t<I>, std::byte>
 O from_cbor(I &&range) {
     O output;
     from_cbor(std::ranges::subrange(range), output);
