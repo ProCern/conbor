@@ -284,7 +284,7 @@ struct Header {
 /** Peek the header, without changing input.
  */
 template <InputRange I>
-  std::tuple<MajorType, uint8_t> peek_header(I input) noexcept {
+  std::tuple<MajorType, uint8_t> peek_header(I input) {
     const std::byte byte = peek(std::move(input));
     const auto type = static_cast<MajorType>(byte >> 5);
     const auto tinycount = static_cast<std::uint8_t>(byte & std::byte(0b00011111));
@@ -325,7 +325,7 @@ inline T from_be_bytes(std::array<std::byte, sizeof(T)> input) {
 }
 
 template <InputRange I>
-  I read_header(I input, Header &header) noexcept {
+  I read_header(I input, Header &header) {
     std::byte byte{};
     input = read(std::move(input), byte);
     const auto type = static_cast<MajorType>(byte >> 5);
