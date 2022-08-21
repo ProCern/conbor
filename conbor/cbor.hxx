@@ -25,6 +25,54 @@
 #include <vector>
 
 namespace conbor {
+/** Default error type.
+ */
+class Error : public std::runtime_error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<std::runtime_error, Args...> Error(Args &&...t) :
+        runtime_error(std::forward<Args>(t)...) {
+    }
+};
+
+/** End of input error.
+ */
+class EndOfInput : public Error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> EndOfInput(Args &&...t) :
+        Error(std::forward<Args>(t)...) {
+    }
+};
+
+/** Illegal SpecialFloat.
+ */
+class IllegalSpecialFloat : public Error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> IllegalSpecialFloat(Args &&...t) :
+        Error(std::forward<Args>(t)...) {
+    }
+};
+
+class InvalidType : public Error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> InvalidType(Args &&...t) :
+        Error(std::forward<Args>(t)...) {
+    }
+};
+
+/** Tried to extract a count when the count wasn't normal
+ */
+class SpecialCountError : public Error {
+  public:
+    template <class... Args>
+    requires std::constructible_from<Error, Args...> SpecialCountError(Args &&...t) :
+        Error(std::forward<Args>(t)...) {
+    }
+};
+
     /** Struct to force ADL for internal types.
      */
     struct Adl {
@@ -60,7 +108,6 @@ enum class MajorType {
  */
 using Count = std::variant<std::uint8_t, std::uint8_t, std::uint16_t, std::uint32_t, std::uint64_t>;
 
-
 struct Header {
     MajorType type;
     Count count;
@@ -70,7 +117,7 @@ struct Header {
     }
 
     // Build with indefinite count
-    constexpr Header(const MajorType type) noexcept : type(type), count(std::in_place_index<0>, 31) {
+    constexpr Header(const MajorType type) noexcept : Header(type, Count(std::in_place_index<0>, 31)) {
     }
 
     // Build with straightforward count
@@ -89,6 +136,27 @@ struct Header {
     }
 
     constexpr auto operator<=>(const Header &other) const noexcept = default;
+
+    /** Extract a full count from the variant,  throwing an error if the count
+     * wouldn't be a legal count or would be ambiguous (like any value in the tiny
+     * field of more than 23 other than 31).
+     * Returns an empty optional if it was a tiny count of 31, indicating
+     * indeterminant.
+     */
+    constexpr std::optional<std::uint64_t> get_count() const {
+        if (count.index() == 0) {
+            const auto tinycount = std::get<0>(count);
+            if (tinycount < 24) {
+                return tinycount;
+            } else if (tinycount == 31) {
+                return std::nullopt;
+            } else {
+                throw SpecialCountError("Tiny count would be ambiguous");
+            }
+        } else {
+            return std::visit([](const auto element) { return static_cast<std::uint64_t>(element); }, count);
+        }
+    }
 };
 
 /** A type that can be encoded to cbor.
@@ -207,77 +275,8 @@ inline void push_into(std::output_iterator<O> auto &container, O &&item) {
     ++container;
 }
 
-/** Default error type.
- */
-class Error : public std::runtime_error {
-  public:
-    template <class... Args>
-    requires std::constructible_from<std::runtime_error, Args...> Error(Args &&...t) :
-        runtime_error(std::forward<Args>(t)...) {
-    }
-};
-
-/** End of input error.
- */
-class EndOfInput : public Error {
-  public:
-    template <class... Args>
-    requires std::constructible_from<Error, Args...> EndOfInput(Args &&...t) :
-        Error(std::forward<Args>(t)...) {
-    }
-};
-
-/** Illegal SpecialFloat.
- */
-class IllegalSpecialFloat : public Error {
-  public:
-    template <class... Args>
-    requires std::constructible_from<Error, Args...> IllegalSpecialFloat(Args &&...t) :
-        Error(std::forward<Args>(t)...) {
-    }
-};
-
-class InvalidType : public Error {
-  public:
-    template <class... Args>
-    requires std::constructible_from<Error, Args...> InvalidType(Args &&...t) :
-        Error(std::forward<Args>(t)...) {
-    }
-};
-
-/** Tried to extract a count when the count wasn't normal
- */
-class SpecialCountError : public Error {
-  public:
-    template <class... Args>
-    requires std::constructible_from<Error, Args...> SpecialCountError(Args &&...t) :
-        Error(std::forward<Args>(t)...) {
-    }
-};
-
 template <std::ranges::range T>
 using Subrange = std::ranges::subrange<std::ranges::iterator_t<T>, std::ranges::sentinel_t<T>>;
-
-/** Extract a full count from the variant,  throwing an error if the count
- * wouldn't be a legal count or would be ambiguous (like any value in the tiny
- * field of more than 23 other than 31).
- * Returns an empty optional if it was a tiny count of 31, indicating
- * indeterminant.
- */
-inline std::optional<std::uint64_t> extract(const Count count) {
-    if (count.index() == 0) {
-        const auto tinycount = std::get<0>(count);
-        if (tinycount < 24) {
-            return tinycount;
-        } else if (tinycount == 31) {
-            return std::nullopt;
-        } else {
-            throw SpecialCountError("Tiny count would be ambiguous");
-        }
-    } else {
-        return std::visit([](const auto element) { return static_cast<std::uint64_t>(element); }, count);
-    }
-}
 
 /** Take a from_cbor without a header and read the header.
  */
@@ -409,27 +408,12 @@ O write_header(O output, const Header header) {
     return output;
 }
 
-/** Write the definite-length header.
- *
- * Will always throw an exception for SpecialFloat.
- *
- * Ouputs the smallest appropriate single-byte or multi-byte header.
- */
-template <std::output_iterator<std::byte> O>
-O write_header(O output, const MajorType type, const std::uint64_t count) {
-    if (type == MajorType::SpecialFloat) {
-        throw IllegalSpecialFloat("SpecialFloat may not be used with the non-Header write_header function");
-    }
-
-    return write_header(output, Header{type, count});
-}
-
 /** Encode the byte string.
  */
 template <std::output_iterator<std::byte> O, std::ranges::input_range R>
 requires std::ranges::sized_range<R> && std::same_as<std::ranges::range_value_t<R>, std::byte>
 O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
-    output = write_header(output, MajorType::ByteString, static_cast<uint64_t>(value.size()));
+    output = write_header(output, Header(MajorType::ByteString, value.size()));
 
     return std::ranges::copy(value, output).out;
 }
@@ -440,7 +424,7 @@ template <InputRange I, Container<std::byte> O>
 I from_cbor(I input, const Header header, O &value) {
     switch (header.type) {
         case MajorType::ByteString: {
-            const auto count = extract(header.count).value();
+            const auto count = header.get_count().value();
             for (size_t i = 0; i < count; ++i) {
                 std::byte byte{};
                 input = read(std::move(input), byte);
@@ -467,7 +451,7 @@ I from_cbor(I input, const Header header, O &value) {
 template <std::output_iterator<std::byte> O, std::ranges::input_range R>
 requires std::ranges::sized_range<R> && (std::same_as < std::ranges::range_value_t<R>, char8_t > || std::same_as < std::ranges::range_value_t<R>, char >)
 O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
-    output = write_header(output, MajorType::Utf8String, static_cast<uint64_t>(value.size()));
+    output = write_header(output, Header(MajorType::Utf8String, value.size()));
 
     return std::ranges::copy(
       value | std::views::transform([](const char8_t c) {
@@ -484,7 +468,7 @@ I from_cbor(I input, const Header header, O &value) {
     using OutputType = typename O::value_type;
     switch (header.type) {
         case MajorType::Utf8String: {
-            const auto count = extract(header.count).value();
+            const auto count = header.get_count().value();
             for (size_t i = 0; i < count; ++i) {
                 std::byte byte{};
                 input = read(std::move(input), byte);
@@ -505,9 +489,9 @@ I from_cbor(I input, const Header header, O &value) {
 template <std::output_iterator<std::byte> O>
 O to_cbor(O output, const SignedInteger auto value, [[maybe_unused]] Adl adl) {
     if (value < 0) {
-        return write_header(output, MajorType::NegativeInteger, static_cast<std::uint64_t>(std::abs(value + 1)));
+        return write_header(output, Header(MajorType::NegativeInteger, std::abs(value + 1)));
     } else {
-        return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
+        return write_header(output, Header(MajorType::PositiveInteger, value));
     }
 }
 
@@ -515,11 +499,11 @@ template <InputRange I, SignedInteger Integer>
 I from_cbor(I input, const Header header, Integer &value) {
     switch (header.type) {
         case MajorType::NegativeInteger: {
-            value = -static_cast<Integer>(extract(header.count).value()) - 1;
+            value = -static_cast<Integer>(header.get_count().value()) - 1;
             break;
         }
         case MajorType::PositiveInteger: {
-            value = extract(header.count).value();
+            value = header.get_count().value();
             break;
         }
         default: {
@@ -532,14 +516,14 @@ I from_cbor(I input, const Header header, Integer &value) {
 // Unsigned integer
 template <std::output_iterator<std::byte> O>
 O to_cbor(O output, const UnsignedInteger auto value, [[maybe_unused]] Adl adl) {
-    return write_header(output, MajorType::PositiveInteger, static_cast<std::uint64_t>(value));
+    return write_header(output, Header(MajorType::PositiveInteger, value));
 }
 
 template <InputRange I>
 I from_cbor(I input, const Header header, UnsignedInteger auto &value) {
     switch (header.type) {
         case MajorType::PositiveInteger: {
-            value = extract(header.count).value();
+            value = header.get_count().value();
             break;
         }
         default: {
@@ -561,7 +545,7 @@ template <InputRange I>
 I from_cbor(I input, const Header header, std::same_as<bool> auto &value) {
     switch (header.type) {
         case MajorType::SpecialFloat: {
-            switch (extract(header.count).value()) {
+            switch (header.get_count().value()) {
                 case 20:
                     value = false;
                     break;
@@ -588,7 +572,7 @@ O to_cbor(O output, const std::nullptr_t, [[maybe_unused]] Adl adl) {
 
 template <InputRange I>
 I from_cbor(I input, const Header header, [[maybe_unused]] std::nullptr_t value) {
-    if (!(header.type == MajorType::SpecialFloat && extract(header.count).value() == 22)) {
+    if (!(header.type == MajorType::SpecialFloat && header.get_count().value() == 22)) {
         throw InvalidType("Tried to read a null pointer, but didn't get one");
     }
     return input;
@@ -769,7 +753,7 @@ I from_cbor(I input, const Header header, std::floating_point auto &value) {
 template <std::output_iterator<std::byte> O, ToCborRange R>
 O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     if constexpr (std::ranges::sized_range<R>) {
-        output = write_header(output, MajorType::Array, static_cast<std::uint64_t>(value.size()));
+        output = write_header(output, Header(MajorType::Array, value.size()));
     } else {
         output = write_header(output, Header{MajorType::Array});
     }
@@ -793,8 +777,7 @@ I from_cbor(I input, const Header header, O &value) {
     using OutputType = typename O::value_type;
     switch (header.type) {
         case MajorType::Array: {
-            const auto count = extract(header.count);
-            if (count) {
+            if (const auto count = header.get_count(); count) {
                 // sized
                 for (size_t i = 0; i < *count; ++i) {
                     OutputType item;
@@ -829,7 +812,7 @@ I from_cbor(I input, const Header header, O &value) {
 template <std::output_iterator<std::byte> O, ToCborPairRange R>
 O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
     if constexpr (std::ranges::sized_range<R>) {
-        output = write_header(output, MajorType::Map, static_cast<std::uint64_t>(value.size()));
+        output = write_header(output, Header(MajorType::Map, value.size()));
     } else {
         output = write_header(output, Header{MajorType::Map});
     }
@@ -863,8 +846,7 @@ I from_cbor(I input, const Header header, O &value) {
 
     switch (header.type) {
         case MajorType::Map: {
-            const auto count = extract(header.count);
-            if (count) {
+            if (const auto count = header.get_count(); count) {
                 // sized
                 for (size_t i = 0; i < *count; ++i) {
                     KeyType output_key;

@@ -404,7 +404,7 @@ namespace foo {
 
     template <std::output_iterator<std::byte> O, conbor::ToCbor T>
     O to_cbor(O output, const CborFollowsTag<T> &tag) {
-        output = write_header(output, conbor::MajorType::SemanticTag, tag.id);
+        output = write_header(output, conbor::Header(conbor::MajorType::SemanticTag, tag.id));
 
         using conbor::to_cbor;
 
@@ -413,7 +413,7 @@ namespace foo {
 
     template <std::output_iterator<std::byte> O, conbor::ToCbor T>
     O to_cbor(O output, const LeetTag<T> &tag) {
-        output = write_header(output, conbor::MajorType::SemanticTag, tag.id);
+        output = write_header(output, conbor::Header(conbor::MajorType::SemanticTag, tag.id));
 
         using conbor::to_cbor;
 
