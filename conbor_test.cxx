@@ -421,27 +421,23 @@ namespace foo {
     }
 
     template <conbor::InputRange I, conbor::FromCbor T>
-    conbor::Subrange<I> from_cbor(I input, CborFollowsTag<T> &tag) {
-        conbor::Header header;
-        auto subrange = conbor::read_header(std::move(input), header);
-        if (!(header.type == conbor::MajorType::SemanticTag && conbor::extract(header.count).value() == tag.id)) {
+    I from_cbor(I input, const conbor::Header header, CborFollowsTag<T> &tag) {
+        if (header != conbor::Header(conbor::MajorType::SemanticTag, tag.id)) {
             throw conbor::InvalidType("Expected CborFollows");
         }
         using conbor::from_cbor;
 
-        return from_cbor(subrange, tag.contained);
+        return from_cbor(std::move(input), tag.contained);
     }
 
     template <conbor::InputRange I, conbor::FromCbor T>
-    conbor::Subrange<I> from_cbor(I input, LeetTag<T> &tag) {
-        conbor::Header header;
-        auto subrange = conbor::read_header(std::move(input), header);
-        if (!(header.type == conbor::MajorType::SemanticTag && conbor::extract(header.count).value() == tag.id)) {
+    conbor::Subrange<I> from_cbor(I input, const conbor::Header header, LeetTag<T> &tag) {
+        if (header != conbor::Header(conbor::MajorType::SemanticTag, tag.id)) {
             throw conbor::InvalidType("Expected Leet");
         }
         using conbor::from_cbor;
 
-        return from_cbor(subrange, tag.contained);
+        return from_cbor(std::move(input), tag.contained);
     }
 }
 
