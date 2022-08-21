@@ -209,6 +209,12 @@ class SpecialCountError : public Error {
 template <std::ranges::range T>
 using Subrange = std::ranges::subrange<std::ranges::iterator_t<T>, std::ranges::sentinel_t<T>>;
 
+// TODO: Remove peek.  This will need major types to have a mostly-simple
+// from_cbor function that calls read_header and read_contents.  This will allow
+// user variant types (or even a library one, really to conditionally check the
+// header and select the correct read_contents function using the already-read
+// header).
+
 /** Peek a single byte, returning an error if input is empty.
  */
 template <InputRange I>
@@ -246,6 +252,17 @@ enum class MajorType {
 /** The count read from the header.  If the count is 24-27, the extended count
  * field is delivered in one of the last four variants, otherwise, it is simply
  * the first variant.
+ *
+ * This can't be just a std::optional<std::uint64_t> because SpecialFloat needs
+ * to be able to tell whether its contents were a 16, 32, or 64-bit floating
+ * point number.
+ *
+ * From Wikipedia: Short counts of 25, 26 or 27 indicate a following extended
+ * count field is to be interpreted as a (big-endian) 16-, 32- or 64-bit IEEE
+ * floating point value. These are the same sizes as an extended count, but are
+ * interpreted differently. In particular, for all other major types, a 2-byte
+ * extended count of 0x1234 and a 4-byte extended count of 0x00001234 are
+ * exactly equivalent. This is not the case for floating-point values. 
  */
 using Count = std::variant<std::uint8_t, std::uint8_t, std::uint16_t, std::uint32_t, std::uint64_t>;
 
