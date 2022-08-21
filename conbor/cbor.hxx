@@ -441,7 +441,8 @@ I from_cbor(I input, const Header header, O &value) {
     return input;
 }
 
-// maybe TODO: indefinite-sized byte string
+// TODO: indefinite-sized strings
+// TODO: zero-copy strings for contiuous iterators and view containers.
 
 /** Encode the utf8 string.
  *
