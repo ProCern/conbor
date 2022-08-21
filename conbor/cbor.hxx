@@ -442,7 +442,10 @@ I from_cbor(I input, const Header header, O &value) {
 }
 
 // TODO: indefinite-sized strings
-// TODO: zero-copy strings for contiuous iterators and view containers.
+// TODO: zero-copy strings for contiguous iterators and view containers.
+// TODO: replace Adl with a State, which can manage decoder and encoder states.
+// needs to be able to hold multiple states of different types, allowing
+// different ToCbor and FromCbor states to seamlessly interoperate.
 
 /** Encode the utf8 string.
  *
