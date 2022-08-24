@@ -866,7 +866,7 @@ I from_cbor(I input, const Header header, O &value) {
                 Header header;
                 for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
                     KeyType output_key;
-                    input = from_cbor(std::move(input), output_key);
+                    input = from_cbor(std::move(input), header, output_key);
 
                     ValueType output_value;
                     input = from_cbor(std::move(input), output_value);
