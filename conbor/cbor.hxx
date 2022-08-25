@@ -229,7 +229,7 @@ concept Insertable = requires (T &t, I &&i) {
 };
 
 template <typename T, typename O>
-concept Container = PushBackable<T, O> || Insertable<T, O> || std::output_iterator<T, O>;
+concept Container = PushBackable<T, O> || Insertable<T, O>;
 
 /** Constrains an array container.
  */
@@ -265,14 +265,6 @@ inline void push_into(PushBackable<O> auto &container, O &&item) {
 template <typename O>
 inline void push_into(Insertable<O> auto &container, O &&item) {
     container.insert(std::move(item));
-}
-
-/** Push into the iterator
- */
-template <typename O>
-inline void push_into(std::output_iterator<O> auto &container, O &&item) {
-    *container = std::move(item);
-    ++container;
 }
 
 template <std::ranges::range T>
@@ -420,8 +412,8 @@ O to_cbor(O output, const R &value, [[maybe_unused]] Adl adl) {
 
 /** Decode the byte string.
  */
-template <InputRange I, Container<std::byte> O>
-I from_cbor(I input, const Header header, O &value) {
+template <InputRange I>
+I from_cbor(I input, const Header header, Container<std::byte> auto &value) {
     switch (header.type) {
         case MajorType::ByteString: {
             const auto count = header.get_count().value();
@@ -431,6 +423,28 @@ I from_cbor(I input, const Header header, O &value) {
                 push_into(value, std::move(byte));
             }
             break;
+        };
+
+        default: {
+            throw InvalidType("Tried to read a byte string, but didn't get one");
+        }
+    }
+
+    return input;
+}
+
+/** Decode the byte string.
+ */
+template <InputRange I, std::output_iterator<std::byte> O>
+I from_cbor(I input, const Header header, O value) {
+    switch (header.type) {
+        case MajorType::ByteString: {
+            const auto count = header.get_count().value();
+            auto begin = std::ranges::begin(input);
+            auto end = begin;
+            std::advance(end, count);
+            std::ranges::copy_n(begin, count, value);
+            return I{end, std::ranges::end(input)};
         };
 
         default: {
@@ -480,6 +494,29 @@ I from_cbor(I input, const Header header, O &value) {
                 push_into(value, std::move(c));
             }
             break;
+        };
+
+        default: {
+            throw InvalidType("Tried to read a string, but didn't get one");
+        }
+    }
+
+    return input;
+}
+
+/** Decode the UTF-8 string.
+ */
+template <InputRange I, typename O>
+requires (std::output_iterator<O, char8_t> || std::output_iterator<O, char>)
+I from_cbor(I input, const Header header, O value) {
+    switch (header.type) {
+        case MajorType::Utf8String: {
+            const auto count = header.get_count().value();
+            auto begin = std::ranges::begin(input);
+            auto end = begin;
+            std::advance(end, count);
+            std::ranges::transform(begin, end, value, [](const auto i) { return static_cast<typename std::iter_value_t<O>>(i); });
+            return I{end, std::ranges::end(input)};
         };
 
         default: {
