@@ -416,11 +416,20 @@ template <InputRange I>
 I from_cbor(I input, const Header header, Container<std::byte> auto &value) {
     switch (header.type) {
         case MajorType::ByteString: {
-            const auto count = header.get_count().value();
-            for (size_t i = 0; i < count; ++i) {
-                std::byte byte{};
-                input = read(std::move(input), byte);
-                push_into(value, std::move(byte));
+            const auto count = header.get_count();
+            if (count) {
+                for (size_t i = 0; i < *count; ++i) {
+                    std::byte byte{};
+                    input = read(std::move(input), byte);
+                    push_into(value, std::move(byte));
+                }
+            } else {
+                Header header;
+                for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
+                    // Needs to have definite-sized children.
+                    header.get_count().value();
+                    input = from_cbor(std::move(input), header, value);
+                }
             }
             break;
         };
@@ -436,15 +445,31 @@ I from_cbor(I input, const Header header, Container<std::byte> auto &value) {
 /** Decode the byte string.
  */
 template <InputRange I, std::output_iterator<std::byte> O>
+requires std::ranges::contiguous_range<I>
 I from_cbor(I input, const Header header, O value) {
     switch (header.type) {
         case MajorType::ByteString: {
-            const auto count = header.get_count().value();
-            auto begin = std::ranges::begin(input);
-            auto end = begin;
-            std::advance(end, count);
-            std::ranges::copy_n(begin, count, value);
-            return I{end, std::ranges::end(input)};
+            const auto count = header.get_count();
+            if (count) {
+                auto begin = std::ranges::begin(input);
+                auto end = begin;
+                std::advance(end, *count);
+                if (end > std::ranges::end(input)) {
+                    throw EndOfInput("Ran out of input while reading string");
+                }
+                std::ranges::copy_n(begin, *count, value);
+                return I{end, std::ranges::end(input)};
+            } else {
+                Header header;
+                for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
+                    // Needs to have definite-sized children.
+                    const auto count = header.get_count().value();
+                    // Don't need to check the range's boundaries, because the
+                    // inner from_cbor will do that
+                    input = from_cbor(std::move(input), header, value);
+                    std::advance(value, count);
+                }
+            }
         };
 
         default: {
@@ -455,8 +480,8 @@ I from_cbor(I input, const Header header, O value) {
     return input;
 }
 
-// TODO: indefinite-sized strings
 // TODO: zero-copy strings for contiguous iterators and view containers.
+// TODO: output strings to iterator for non-contiguous input ranges.
 // TODO: replace Adl with a State, which can manage decoder and encoder states.
 // needs to be able to hold multiple states of different types, allowing
 // different ToCbor and FromCbor states to seamlessly interoperate.
@@ -486,12 +511,21 @@ I from_cbor(I input, const Header header, O &value) {
     using OutputType = typename O::value_type;
     switch (header.type) {
         case MajorType::Utf8String: {
-            const auto count = header.get_count().value();
-            for (size_t i = 0; i < count; ++i) {
-                std::byte byte{};
-                input = read(std::move(input), byte);
-                const auto c = static_cast<OutputType>(byte);
-                push_into(value, std::move(c));
+            const auto count = header.get_count();
+            if (count) {
+                for (size_t i = 0; i < *count; ++i) {
+                    std::byte byte{};
+                    input = read(std::move(input), byte);
+                    const auto c = static_cast<OutputType>(byte);
+                    push_into(value, std::move(c));
+                }
+            } else {
+                Header header;
+                for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
+                    // Needs to have definite-sized children.
+                    header.get_count().value();
+                    input = from_cbor(std::move(input), header, value);
+                }
             }
             break;
         };
@@ -507,16 +541,34 @@ I from_cbor(I input, const Header header, O &value) {
 /** Decode the UTF-8 string.
  */
 template <InputRange I, typename O>
-requires (std::output_iterator<O, char8_t> || std::output_iterator<O, char>)
+requires std::ranges::contiguous_range<I> && (std::output_iterator<O, char8_t> || std::output_iterator<O, char>)
 I from_cbor(I input, const Header header, O value) {
+    using IterType = typename std::iter_value_t<O>;
+
     switch (header.type) {
         case MajorType::Utf8String: {
-            const auto count = header.get_count().value();
-            auto begin = std::ranges::begin(input);
-            auto end = begin;
-            std::advance(end, count);
-            std::ranges::transform(begin, end, value, [](const auto i) { return static_cast<typename std::iter_value_t<O>>(i); });
-            return I{end, std::ranges::end(input)};
+            const auto count = header.get_count();
+            if (count) {
+                auto begin = std::ranges::begin(input);
+                auto end = begin;
+                std::advance(end, *count);
+                if (end > std::ranges::end(input)) {
+                    throw EndOfInput("Ran out of input while reading string");
+                }
+                std::ranges::transform(begin, end, value, [](const auto i) { return static_cast<IterType>(i); });
+                return I{end, std::ranges::end(input)};
+            } else {
+                Header header;
+                for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
+                    // Needs to have definite-sized children.
+                    const auto count = header.get_count().value();
+
+                    // Don't need to check the range's boundaries, because the
+                    // inner from_cbor will do that
+                    input = from_cbor(std::move(input), header, value);
+                    std::advance(value, count);
+                }
+            }
         };
 
         default: {
