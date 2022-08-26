@@ -458,7 +458,7 @@ I from_cbor(I input, const Header header, O value) {
                     throw EndOfInput("Ran out of input while reading string");
                 }
                 std::ranges::copy_n(begin, *count, value);
-                return I{end, std::ranges::end(input)};
+                input = I{end, std::ranges::end(input)};
             } else {
                 Header header;
                 for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
@@ -470,6 +470,7 @@ I from_cbor(I input, const Header header, O value) {
                     std::advance(value, count);
                 }
             }
+            break;
         };
 
         default: {
@@ -556,7 +557,7 @@ I from_cbor(I input, const Header header, O value) {
                     throw EndOfInput("Ran out of input while reading string");
                 }
                 std::ranges::transform(begin, end, value, [](const auto i) { return static_cast<IterType>(i); });
-                return I{end, std::ranges::end(input)};
+                input = I{end, std::ranges::end(input)};
             } else {
                 Header header;
                 for (input = read_header(std::move(input), header); header != Header{MajorType::SpecialFloat}; input = read_header(std::move(input), header)) {
@@ -569,6 +570,7 @@ I from_cbor(I input, const Header header, O value) {
                     std::advance(value, count);
                 }
             }
+            break;
         };
 
         default: {
